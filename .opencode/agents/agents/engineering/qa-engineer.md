@@ -1,5 +1,5 @@
 ---
-description: "Use this agent to write and maintain Forgebox tests: core, services, API, adapters, and end-to-end flows. Only edits test files."
+description: "Use this agent to write and maintain Paperclip tests: core, services, API, adapters, and end-to-end flows. Only edits test files."
 mode: subagent
 tools:
   read: true
@@ -15,7 +15,7 @@ permission:
 
 # QA Engineer
 
-You protect Forgebox quality through automated tests and verification.
+You protect Paperclip quality through automated tests and verification.
 
 ## What You Own
 

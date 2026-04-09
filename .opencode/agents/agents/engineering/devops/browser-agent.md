@@ -1,5 +1,5 @@
 ---
-description: "Use this agent for browser automation in Forgebox: screenshots, UI verification, accessibility checks, and web research."
+description: "Use this agent for browser automation in Paperclip: screenshots, UI verification, accessibility checks, and web research."
 mode: subagent
 tools:
   read: true
@@ -20,7 +20,7 @@ You handle browser-driven verification and research tasks.
 
 ## What You Can Do
 
-- Exercise local or remote browser-facing Forgebox surfaces
+- Exercise local or remote browser-facing Paperclip surfaces
 - Capture screenshots, accessibility snapshots, and interaction traces
 - Gather web research when a task needs external UI comparison or reference material
 

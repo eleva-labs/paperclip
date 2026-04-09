@@ -1,5 +1,5 @@
 ---
-description: "Use this agent for read-only review of Forgebox code, plans, and architecture changes. Never fixes files directly."
+description: "Use this agent for read-only review of Paperclip code, plans, and architecture changes. Never fixes files directly."
 mode: subagent
 tools:
   read: true
@@ -14,7 +14,7 @@ permission:
 
 # Reviewer
 
-You provide structured, read-only review for engineering work in Forgebox.
+You provide structured, read-only review for engineering work in Paperclip.
 
 ## Review Focus
 

@@ -16,7 +16,7 @@ Create a complete, reviewer-friendly GitHub pull request from a ready branch.
 - Implementation is already complete on the current branch
 - The branch needs a GitHub PR with accurate branch-wide summary and reviewer guidance
 - The human or an engineering orchestrator explicitly requests PR creation
-- The work needs Forgebox-specific impact analysis instead of a generic PR summary
+- The work needs Paperclip-specific impact analysis instead of a generic PR summary
 
 ## When NOT to Use
 
@@ -97,7 +97,7 @@ Do not write the PR as a commit log. Write it as the branch narrative reviewers 
    - include reviewer focus and merge/rollout notes when relevant
 4. If validation is incomplete, migrations are risky, or follow-up work is still required, prefer draft PR mode unless the human says otherwise.
 
-### Step 5: Forgebox PR Completeness Check
+### Step 5: Paperclip PR Completeness Check
 
 Before creating the PR, verify the draft covers all relevant items:
 
@@ -147,6 +147,6 @@ Keep it lean. Omit sections that are truly not relevant, but do not omit importa
 - The PR title reflects the net branch outcome, not a single internal step
 - The PR body is concise but complete enough for reviewer comprehension
 - Validation, caveats, reviewer focus, and merge/rollout notes are included when relevant
-- Forgebox-specific impact areas are called out when they changed
+- Paperclip-specific impact areas are called out when they changed
 - Branch-target behavior is applied per canonical repository governance and any current-state exceptions are described accurately
 - The PR is created with `gh pr create` and the URL is returned

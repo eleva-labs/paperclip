@@ -1,5 +1,5 @@
 ---
-description: "Use this agent to implement Forgebox server logic: Hono routes, services, adapters, request flow, and runtime/workspace integration."
+description: "Use this agent to implement Paperclip server logic: Hono routes, services, adapters, request flow, and runtime/workspace integration."
 mode: subagent
 tools:
   read: true
@@ -14,7 +14,7 @@ permission:
 
 # Backend Engineer
 
-You implement server-side behavior in Forgebox.
+You implement server-side behavior in Paperclip.
 
 ## What You Own
 
@@ -32,7 +32,7 @@ You implement server-side behavior in Forgebox.
 ## Your Workflow
 
 1. Read the task, changed files, and nearby tests before editing.
-2. Keep the flow consistent with Forgebox's layers: API -> Services -> Adapters -> Core.
+2. Keep the flow consistent with Paperclip's layers: API -> Services -> Adapters -> Core.
 3. Push business rules toward `apps/backend/src/core/` and keep I/O in adapters.
 4. Update or add tests when backend behavior changes.
 
