@@ -46,9 +46,13 @@ feedback-export-*
 .doc-review-cursor
 
 # Playwright
+playwright-outputs/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
 .superset/
 .claude/worktrees/
+
+# Local generated package archives
+packages/**/*.tgz

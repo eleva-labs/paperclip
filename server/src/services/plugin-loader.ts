@@ -42,6 +42,7 @@ import { logger } from "../middleware/logger.js";
 import { pluginManifestValidator } from "./plugin-manifest-validator.js";
 import { pluginCapabilityValidator } from "./plugin-capability-validator.js";
 import { pluginRegistryService } from "./plugin-registry.js";
+import { getDefaultTempRoot, stageLocalPackageInstall } from "./local-package-staging.js";
 import type { PluginWorkerManager, WorkerStartOptions, WorkerToHostHandlers } from "./plugin-worker-manager.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginJobScheduler } from "./plugin-job-scheduler.js";
@@ -803,20 +804,22 @@ export function pluginLoader(
     let resolvedPackageName: string;
 
     if (localPath) {
-      // Local path install — validate the directory exists
+      // Local path install — stage into a package-managed temp root so
+      // workspace dependencies resolve like a real installed package.
       const absLocalPath = path.resolve(localPath);
       if (!existsSync(absLocalPath)) {
         throw new Error(`Local plugin path does not exist: ${absLocalPath}`);
       }
-      resolvedPackagePath = absLocalPath;
-      const pkgJson = await readPackageJson(absLocalPath);
+      const staged = await stageLocalPackageInstall(absLocalPath, getDefaultTempRoot());
+      resolvedPackagePath = staged.packagePath;
+      const pkgJson = await readPackageJson(resolvedPackagePath);
       resolvedPackageName =
         typeof pkgJson?.["name"] === "string"
           ? pkgJson["name"]
-          : path.basename(absLocalPath);
+          : path.basename(resolvedPackagePath);
 
       log.info(
-        { localPath: absLocalPath, packageName: resolvedPackageName },
+        { localPath: absLocalPath, stagedPath: resolvedPackagePath, packageName: resolvedPackageName },
         "plugin-loader: fetching plugin from local path",
       );
     } else {

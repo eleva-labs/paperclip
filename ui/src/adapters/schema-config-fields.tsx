@@ -9,7 +9,10 @@ import {
   DraftNumberInput,
   DraftTextarea,
   ToggleField,
+  CollapsibleSection,
+  help,
 } from "../components/agent-config-primitives";
+import { ChoosePathButton } from "../components/PathInstructionsModal";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { ChevronDown } from "lucide-react";
 
@@ -55,6 +58,27 @@ function SelectField({
 }
 const inputClass =
   "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
+const instructionsFileHint =
+  "Absolute path to a markdown file (e.g. AGENTS.md) that defines this agent's behavior. Injected into the system prompt at runtime.";
+const OPENCODE_PROJECT_LOCAL_HIDDEN_FIELDS = new Set([
+  "command",
+  "model",
+  "variant",
+  "instructionsFilePath",
+  "extraArgs",
+  "env",
+  "promptTemplate",
+  "dangerouslySkipPermissions",
+  "timeoutSec",
+  "graceSec",
+]);
+const OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS = new Set([
+  "cwd",
+  "bootstrapPromptTemplate",
+  "allowProjectConfig",
+  "canonicalWorkspaceOnly",
+  "syncPluginKey",
+]);
 
 
 // ---------------------------------------------------------------------------
@@ -295,8 +319,11 @@ export function SchemaConfigFields({
   config,
   eff,
   mark,
+  hideInstructionsFile,
 }: AdapterConfigFieldsProps) {
   const schema = useConfigSchema(adapterType);
+  const isOpenCodeProjectLocal = adapterType === "opencode_project_local";
+  const [projectAdvancedOpen, setProjectAdvancedOpen] = useState(false);
 
   const [defaultsApplied, setDefaultsApplied] = useState(false);
   useEffect(() => {
@@ -317,6 +344,19 @@ export function SchemaConfigFields({
   }, [schema, isCreate, defaultsApplied, set, values?.adapterSchemaValues]);
 
   if (!schema || schema.fields.length === 0) return null;
+  const schemaFields = schema.fields;
+
+  const visibleFields = isOpenCodeProjectLocal
+    ? schemaFields.filter((field) => !OPENCODE_PROJECT_LOCAL_HIDDEN_FIELDS.has(field.key))
+    : schemaFields;
+  const inlineFields = isOpenCodeProjectLocal
+    ? visibleFields.filter((field) => !OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS.has(field.key))
+    : visibleFields;
+  const advancedFields = isOpenCodeProjectLocal
+    ? visibleFields.filter((field) => OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS.has(field.key))
+    : [];
+  const instructionsFileField = schemaFields.find((field) => field.key === "instructionsFilePath");
+  const skipPermissionsField = schemaFields.find((field) => field.key === "dangerouslySkipPermissions");
 
   function readValue(field: ConfigFieldSchema): unknown {
     if (isCreate) {
@@ -337,7 +377,7 @@ export function SchemaConfigFields({
 
       // When provider changes, auto-clear model if it's not in the new provider's list
       if (field.key === "provider" && schema) {
-        const modelField = schema.fields.find((f) => f.key === "model");
+        const modelField = schemaFields.find((f) => f.key === "model");
         if (modelField?.meta?.providerModels) {
           const modelsByProvider = modelField.meta.providerModels as Record<string, string[]>;
           const providerModels = modelsByProvider[String(value)] ?? [];
@@ -354,7 +394,7 @@ export function SchemaConfigFields({
 
       // Same logic for edit mode
       if (field.key === "provider" && schema) {
-        const modelField = schema.fields.find((f) => f.key === "model");
+        const modelField = schemaFields.find((f) => f.key === "model");
         if (modelField?.meta?.providerModels) {
           const modelsByProvider = modelField.meta.providerModels as Record<string, string[]>;
           const providerModels = modelsByProvider[String(value)] ?? [];
@@ -367,9 +407,7 @@ export function SchemaConfigFields({
     }
   }
 
-  return (
-    <>
-      {schema.fields.map((field) => {
+  function renderField(field: ConfigFieldSchema) {
         switch (field.type) {
           case "select": {
             const currentVal = String(readValue(field) ?? "");
@@ -424,11 +462,12 @@ export function SchemaConfigFields({
             // based on the current provider value
             let comboboxOptions = field.options ?? [];
             if (field.meta?.providerModels) {
-              const providerVal = String(readValue(schema.fields.find((f) => f.key === "provider")!) ?? "auto");
+              const providerField = schemaFields.find((f) => f.key === "provider");
+              const providerVal = String(readValue(providerField ?? field) ?? "auto");
               const modelsByProvider = field.meta.providerModels as Record<string, string[]>;
               if (providerVal === "auto") {
                 // Auto: show all models from all providers, grouped by provider
-                const providerLabel = schema.fields.find((f) => f.key === "provider");
+                const providerLabel = providerField;
                 const providerOptions = providerLabel?.options ?? [];
                 comboboxOptions = Object.entries(modelsByProvider).flatMap(([prov, models]) =>
                   models.map((m) => ({
@@ -439,7 +478,7 @@ export function SchemaConfigFields({
                 );
               } else {
                 const providerModels = modelsByProvider[providerVal] ?? [];
-                const providerLabel = schema.fields.find((f) => f.key === "provider");
+                const providerLabel = providerField;
                 const provName = providerLabel?.options?.find((p) => p.value === providerVal)?.label ?? providerVal;
                 comboboxOptions = providerModels.map((m) => ({
                   label: m,
@@ -473,7 +512,50 @@ export function SchemaConfigFields({
               </Field>
             );
         }
-      })}
+  }
+
+  return (
+    <>
+      {isOpenCodeProjectLocal && !hideInstructionsFile && instructionsFileField && (
+        <Field label="Agent instructions file" hint={instructionsFileHint}>
+          <div className="flex items-center gap-2">
+            <DraftInput
+              value={String(readValue(instructionsFileField) ?? "")}
+              onCommit={(v) => writeValue(instructionsFileField, v || undefined)}
+              immediate
+              className={inputClass}
+              placeholder="/absolute/path/to/AGENTS.md"
+            />
+            <ChoosePathButton />
+          </div>
+        </Field>
+      )}
+
+      {isOpenCodeProjectLocal && skipPermissionsField && (
+        <ToggleField
+          label="Skip permissions"
+          hint={help.dangerouslySkipPermissions}
+          checked={readValue(skipPermissionsField) === true}
+          onChange={(v) => writeValue(skipPermissionsField, v)}
+        />
+      )}
+
+      {inlineFields.map((field) => renderField(field))}
+
+      {isOpenCodeProjectLocal && advancedFields.length > 0 && (
+        <CollapsibleSection
+          title="Project adapter options"
+          open={projectAdvancedOpen}
+          onToggle={() => setProjectAdvancedOpen((open) => !open)}
+        >
+          <div className="space-y-3">
+            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              Leave these at their defaults for normal OpenCode project runs. Change them only when you need fallback workspace control or plugin-specific behavior.
+            </div>
+            {advancedFields.map((field) => renderField(field))}
+          </div>
+        </CollapsibleSection>
+      )}
     </>
   );
 }
