@@ -140,4 +140,35 @@ describe("server adapter registry", () => {
     expect(await detectAdapterModel("claude_local")).toBeNull();
     expect(detectModel).toHaveBeenCalledTimes(1);
   });
+
+  it("allows external project-aware adapters to coexist without replacing built-in opencode_local", () => {
+    unregisterServerAdapter("opencode_project_local");
+
+    const builtInOpenCode = findServerAdapter("opencode_local");
+    expect(builtInOpenCode).not.toBeNull();
+
+    const projectAdapter: ServerAdapterModule = {
+      type: "opencode_project_local",
+      execute: async () => ({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+      }),
+      testEnvironment: async () => ({
+        adapterType: "opencode_project_local",
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      models: [{ id: "openai/gpt-5.4", label: "GPT-5.4" }],
+      supportsLocalAgentJwt: false,
+    };
+
+    registerServerAdapter(projectAdapter);
+
+    expect(requireServerAdapter("opencode_project_local")).toBe(projectAdapter);
+    expect(requireServerAdapter("opencode_local")).toBe(builtInOpenCode);
+
+    unregisterServerAdapter("opencode_project_local");
+  });
 });
