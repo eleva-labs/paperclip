@@ -1,0 +1,52 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "default_agent": "orchestrator",
+    "autoupdate": true,
+    "instructions": ["AGENTS.md"],
+    "permission": {
+      "edit": "allow",
+      "bash": "allow"
+    },
+    "compaction": {
+      "auto": true,
+      "prune": true
+    },
+    "tools": {
+      "helicone_*": true,
+      "playwright_*": true
+    },
+    "mcp": {
+      "helicone": {
+        "type": "local",
+        "command": [
+          "./.mcp/launch-mcp.sh",
+          "npx",
+          "@helicone/mcp@latest"
+        ],
+        "enabled": true
+      },
+      "playwright": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@playwright/mcp@latest",
+          "--headless",
+          "--isolated",
+          "--timeout-action",
+          "10000",
+          "--timeout-navigation",
+          "60000",
+          "--output-dir",
+          "./playwright-outputs/"
+        ],
+        "enabled": true,
+        "timeout": 10000
+      }
+    },
+    "plugin": [
+      "@iam-brain/opencode-codex-auth",
+      "opencode-claude-auth"
+    ]
+  }
+  
