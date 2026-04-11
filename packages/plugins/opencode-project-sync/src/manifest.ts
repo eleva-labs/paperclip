@@ -9,6 +9,7 @@ export const OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY = "project-sync-preview";
 export const OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY = "host-mutation-contract";
 export const OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY = "bootstrap-project";
 export const OPENCODE_PROJECT_SYNC_ACTION_KEY = "sync-now";
+export const OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY = "finalize-sync-now";
 export const OPENCODE_PROJECT_EXPORT_ACTION_KEY = "export-to-repo";
 export const OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY = "test-runtime";
 

@@ -11,6 +11,7 @@ import {
   OPENCODE_PROJECT_EXPORT_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
+  OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_PLUGIN_ID,
   OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY,
   OPENCODE_PROJECT_SYNC_STATE_DATA_KEY,
@@ -29,11 +30,15 @@ import { writeContainedExportFile } from "./export-write-guard.js";
 import { buildExportPlan, validateExportRepoRelPath } from "./export-plan.js";
 import {
   importedOpencodeAgentMetadataSchema,
+  opencodeProjectFinalizeSyncInputSchema,
   opencodeProjectExportInputSchema,
   opencodeProjectResolveWorkspaceInputSchema,
+  opencodeProjectSyncPlanResultSchema,
   opencodeProjectSyncNowInputSchema,
   opencodeProjectTestRuntimeInputSchema,
   type ImportedOpencodeAgentMetadata,
+  type OpencodeProjectAppliedAgentResult,
+  type OpencodeProjectAppliedSkillResult,
   type OpencodeProjectConflict,
   type OpencodeProjectSyncManifestAgent,
   type OpencodeProjectSyncManifestSkill,
@@ -76,10 +81,6 @@ type ExportActionResult = {
   conflicts: OpencodeProjectConflict[];
 };
 
-type WorkerConfig = {
-  workerHostApiBaseUrl: string;
-};
-
 function isLoggedPluginError(error: unknown): boolean {
   return Boolean(
     error
@@ -107,22 +108,8 @@ function getPreviewScope(workspaceId: string) {
   } as const;
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
 function unreachable(message: string): never {
   throw new Error(message);
-}
-
-async function getWorkerConfig(ctx: PluginContext): Promise<WorkerConfig> {
-  const config = await ctx.config.get();
-  const configuredBaseUrl = typeof config.workerHostApiBaseUrl === "string" && config.workerHostApiBaseUrl.trim().length > 0
-    ? config.workerHostApiBaseUrl.trim()
-    : "http://127.0.0.1:3100/api";
-  return {
-    workerHostApiBaseUrl: trimTrailingSlash(configuredBaseUrl),
-  };
 }
 
 function isRepoCheckout(cwd: string): boolean {
@@ -250,132 +237,6 @@ async function logFailureAndThrow(
   throw error;
 }
 
-async function fetchJson<T>(ctx: PluginContext, url: string, init?: RequestInit): Promise<T> {
-  const response = await ctx.http.fetch(url, {
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    const detail = body.trim().length > 0 ? ` ${body.trim()}` : "";
-    throw new Error(
-      `Host API request failed (${response.status}) for ${url}.${detail} Configure a reachable /api base URL and a deployment path that authorizes worker HTTP requests.`,
-    );
-  }
-
-  return await response.json() as T;
-}
-
-async function listCompanySkills(
-  ctx: PluginContext,
-  companyId: string,
-): Promise<MinimalPaperclipSkill[]> {
-  const config = await getWorkerConfig(ctx);
-  return await fetchJson<MinimalPaperclipSkill[]>(
-    ctx,
-    `${config.workerHostApiBaseUrl}/companies/${encodeURIComponent(companyId)}/skills`,
-    { method: "GET" },
-  );
-}
-
-async function getCompanySkill(
-  ctx: PluginContext,
-  companyId: string,
-  skillId: string,
-): Promise<MinimalPaperclipSkill & { markdown: string }> {
-  const config = await getWorkerConfig(ctx);
-  return await fetchJson<MinimalPaperclipSkill & { markdown: string }>(
-    ctx,
-    `${config.workerHostApiBaseUrl}/companies/${encodeURIComponent(companyId)}/skills/${encodeURIComponent(skillId)}`,
-    { method: "GET" },
-  );
-}
-
-async function createCompanySkill(
-  ctx: PluginContext,
-  companyId: string,
-  payload: { name: string; slug: string; markdown: string },
-): Promise<{ id: string }> {
-  const config = await getWorkerConfig(ctx);
-  return await fetchJson<{ id: string }>(
-    ctx,
-    `${config.workerHostApiBaseUrl}/companies/${encodeURIComponent(companyId)}/skills`,
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-async function updateCompanySkillFile(
-  ctx: PluginContext,
-  companyId: string,
-  skillId: string,
-  payload: { path: string; content: string },
-): Promise<void> {
-  const config = await getWorkerConfig(ctx);
-  await fetchJson(
-    ctx,
-    `${config.workerHostApiBaseUrl}/companies/${encodeURIComponent(companyId)}/skills/${encodeURIComponent(skillId)}/files`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-async function createAgent(
-  ctx: PluginContext,
-  companyId: string,
-  payload: Record<string, unknown>,
-): Promise<{ id: string }> {
-  const config = await getWorkerConfig(ctx);
-  return await fetchJson<{ id: string }>(
-    ctx,
-    `${config.workerHostApiBaseUrl}/companies/${encodeURIComponent(companyId)}/agents`,
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-async function updateAgent(
-  ctx: PluginContext,
-  agentId: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  const config = await getWorkerConfig(ctx);
-  await fetchJson(
-    ctx,
-    `${config.workerHostApiBaseUrl}/agents/${encodeURIComponent(agentId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    },
-  );
-}
-
-async function syncAgentSkills(
-  ctx: PluginContext,
-  companyId: string,
-  agentId: string,
-  desiredSkills: string[],
-): Promise<void> {
-  const config = await getWorkerConfig(ctx);
-  await fetchJson(
-    ctx,
-    `${config.workerHostApiBaseUrl}/agents/${encodeURIComponent(agentId)}/skills/sync?companyId=${encodeURIComponent(companyId)}`,
-    {
-      method: "POST",
-      body: JSON.stringify({ desiredSkills }),
-    },
-  );
-}
 
 function toMinimalAgent(agent: {
   id: string;
@@ -479,7 +340,12 @@ async function syncProject(
   const previousState = await readOrCreateSyncState(ctx, resolvedWorkspace);
   const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
   const existingAgents = (await ctx.agents.list({ companyId: input.companyId })).map(toMinimalAgent);
-  const existingSkills = await listCompanySkills(ctx, input.companyId);
+  const existingSkills: MinimalPaperclipSkill[] = (previousState.importedSkills ?? []).map((entry: OpencodeProjectSyncManifestSkill) => ({
+    id: entry.paperclipSkillId,
+    key: entry.externalSkillKey,
+    slug: entry.externalSkillKey,
+    name: entry.externalSkillName ?? entry.externalSkillKey,
+  }));
   const importedAt = new Date().toISOString();
   const plan = buildImportPlan({
     companyId: input.companyId,
@@ -548,147 +414,7 @@ async function syncProject(
     };
   }
 
-  const skillIdByExternalKey = new Map<string, string>();
-  for (const upsert of plan.skillUpserts) {
-    let skillId = upsert.paperclipSkillId;
-    if (upsert.operation === "create") {
-      const created = await createCompanySkill(ctx, input.companyId, {
-        name: upsert.payload.name,
-        slug: upsert.payload.slug,
-        markdown: upsert.payload.markdown,
-      });
-      skillId = created.id;
-    }
-    if (skillId === null) {
-      await logFailureAndThrow(ctx, {
-        companyId: input.companyId,
-        projectId: input.projectId,
-        message: `Skill '${upsert.externalSkillKey}' could not be mapped to a Paperclip skill id during sync.`,
-        metadata: { workspaceId: resolvedWorkspace.workspaceId },
-      });
-    }
-    const resolvedSkillId = skillId ?? unreachable("Expected skill id after sync mapping failure handling.");
-
-    await updateCompanySkillFile(ctx, input.companyId, resolvedSkillId, {
-      path: upsert.payload.filePath,
-      content: upsert.payload.markdown,
-    });
-    skillIdByExternalKey.set(upsert.externalSkillKey, resolvedSkillId);
-  }
-
-  const agentIdByExternalKey = new Map<string, string>();
-  for (const upsert of plan.agentUpserts) {
-    let agentId = upsert.paperclipAgentId;
-    if (upsert.operation === "create") {
-      const created = await createAgent(ctx, input.companyId, {
-        name: upsert.payload.name,
-        role: "general",
-        title: upsert.payload.title,
-        reportsTo: null,
-        adapterType: upsert.payload.adapterType,
-        adapterConfig: upsert.payload.adapterConfig,
-        metadata: upsert.payload.metadata,
-      });
-      agentId = created.id;
-    } else if (agentId) {
-      await updateAgent(ctx, agentId, {
-        name: upsert.payload.name,
-        title: upsert.payload.title,
-        adapterType: upsert.payload.adapterType,
-        adapterConfig: upsert.payload.adapterConfig,
-        metadata: upsert.payload.metadata,
-      });
-    }
-    if (agentId === null) {
-      await logFailureAndThrow(ctx, {
-        companyId: input.companyId,
-        projectId: input.projectId,
-        message: `Agent '${upsert.externalAgentKey}' could not be mapped to a Paperclip agent id during sync.`,
-        metadata: { workspaceId: resolvedWorkspace.workspaceId },
-      });
-    }
-    const resolvedAgentId = agentId ?? unreachable("Expected agent id after sync mapping failure handling.");
-    agentIdByExternalKey.set(upsert.externalAgentKey, resolvedAgentId);
-  }
-
-  for (const upsert of plan.agentUpserts) {
-    const agentId = agentIdByExternalKey.get(upsert.externalAgentKey);
-    if (!agentId) continue;
-    const metadata = importedOpencodeAgentMetadataSchema.parse(upsert.payload.metadata);
-    const managerId = metadata.reportsToExternalKey ? agentIdByExternalKey.get(metadata.reportsToExternalKey) ?? null : null;
-    await updateAgent(ctx, agentId, {
-      reportsTo: managerId,
-      metadata: {
-        ...metadata,
-        reportsToExternalKey: metadata.reportsToExternalKey,
-      },
-    });
-    await syncAgentSkills(
-      ctx,
-      input.companyId,
-      agentId,
-      upsert.desiredSkillKeys.map((skillKey) => skillIdByExternalKey.get(skillKey)).filter((skillId): skillId is string => Boolean(skillId)),
-    );
-  }
-
-  const nextState = opencodeProjectSyncStateSchema.parse({
-    ...previousState,
-    bootstrapCompletedAt: previousState.bootstrapCompletedAt ?? importedAt,
-    canonicalRepoRoot: resolvedWorkspace.cwd,
-    canonicalRepoUrl: resolvedWorkspace.repoUrl,
-    canonicalRepoRef: resolvedWorkspace.repoRef,
-    lastScanFingerprint: discovery.lastScanFingerprint,
-    lastImportedAt: importedAt,
-    importedAgents: plan.agentUpserts.map((entry) => ({
-      paperclipAgentId: agentIdByExternalKey.get(entry.externalAgentKey) as string,
-      externalAgentKey: entry.externalAgentKey,
-      repoRelPath: entry.repoRelPath,
-      fingerprint: entry.fingerprint,
-      canonicalLocator: entry.payload.metadata.canonicalLocator,
-      externalAgentName: entry.payload.metadata.externalAgentName,
-      lastImportedAt: entry.payload.metadata.lastImportedAt,
-      lastExportedFingerprint: entry.payload.metadata.lastExportedFingerprint,
-      lastExportedAt: entry.payload.metadata.lastExportedAt,
-    })),
-    importedSkills: plan.skillUpserts.map((entry) => ({
-      paperclipSkillId: skillIdByExternalKey.get(entry.externalSkillKey) as string,
-      externalSkillKey: entry.externalSkillKey,
-      repoRelPath: entry.repoRelPath,
-      fingerprint: entry.fingerprint,
-      canonicalLocator: `${resolvedWorkspace.cwd}::${entry.repoRelPath}`,
-      externalSkillName: entry.payload.name,
-      lastImportedAt: importedAt,
-      lastExportedFingerprint: previousState.importedSkills.find(
-        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
-      )?.lastExportedFingerprint ?? null,
-      lastExportedAt: previousState.importedSkills.find(
-        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
-      )?.lastExportedAt ?? null,
-    })),
-    warnings: plan.warnings,
-    conflicts: [],
-  });
-
-  await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
-  await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), {
-    ...previewFromDiscovery(discovery),
-    warnings: plan.warnings,
-    conflicts: [],
-  });
-  await logProjectActivity(ctx, {
-    companyId: input.companyId,
-    projectId: input.projectId,
-    message: "OpenCode import sync completed",
-    metadata: {
-      workspaceId: resolvedWorkspace.workspaceId,
-      importedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "create").length,
-      updatedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "update").length,
-      importedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "create").length,
-      updatedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "update").length,
-    },
-  });
-
-  return {
+  return opencodeProjectSyncPlanResultSchema.parse({
     ok: true,
     dryRun: false,
     workspaceId: resolvedWorkspace.workspaceId,
@@ -699,6 +425,121 @@ async function syncProject(
     warnings: plan.warnings,
     conflicts: [],
     lastScanFingerprint: discovery.lastScanFingerprint,
+    sourceOfTruth: plan.sourceOfTruth,
+    skillUpserts: plan.skillUpserts,
+    agentUpserts: plan.agentUpserts,
+  });
+}
+
+async function finalizeSyncProject(
+  ctx: PluginContext,
+  input: ReturnType<typeof opencodeProjectFinalizeSyncInputSchema.parse>,
+): Promise<SyncActionResult> {
+  const resolvedWorkspace = await resolveCanonicalProjectWorkspace(ctx, input);
+  if (input.workspaceId && input.workspaceId !== resolvedWorkspace.workspaceId) {
+    await logFailureAndThrow(ctx, {
+      companyId: input.companyId,
+      projectId: input.projectId,
+      message: `Requested workspace '${input.workspaceId}' does not match the canonical primary workspace '${resolvedWorkspace.workspaceId}'. Phase-1 sync only supports the canonical workspace.`,
+      metadata: { requestedWorkspaceId: input.workspaceId, canonicalWorkspaceId: resolvedWorkspace.workspaceId },
+    });
+  }
+
+  const previousState = await readOrCreateSyncState(ctx, resolvedWorkspace);
+  const skillIdByExternalKey = new Map(input.appliedSkills.map((entry: OpencodeProjectAppliedSkillResult) => [entry.externalSkillKey, entry.paperclipSkillId] as const));
+  const agentIdByExternalKey = new Map(input.appliedAgents.map((entry: OpencodeProjectAppliedAgentResult) => [entry.externalAgentKey, entry.paperclipAgentId] as const));
+
+  for (const upsert of input.skillUpserts) {
+    if (!skillIdByExternalKey.get(upsert.externalSkillKey)) {
+      await logFailureAndThrow(ctx, {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        message: `Skill '${upsert.externalSkillKey}' could not be mapped to a Paperclip skill id during sync finalization.`,
+        metadata: { workspaceId: resolvedWorkspace.workspaceId },
+      });
+    }
+  }
+
+  for (const upsert of input.agentUpserts) {
+    if (!agentIdByExternalKey.get(upsert.externalAgentKey)) {
+      await logFailureAndThrow(ctx, {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        message: `Agent '${upsert.externalAgentKey}' could not be mapped to a Paperclip agent id during sync finalization.`,
+        metadata: { workspaceId: resolvedWorkspace.workspaceId },
+      });
+    }
+  }
+
+  const nextState = opencodeProjectSyncStateSchema.parse({
+    ...previousState,
+    bootstrapCompletedAt: previousState.bootstrapCompletedAt ?? input.importedAt,
+    canonicalRepoRoot: resolvedWorkspace.cwd,
+    canonicalRepoUrl: resolvedWorkspace.repoUrl,
+    canonicalRepoRef: resolvedWorkspace.repoRef,
+    lastScanFingerprint: input.lastScanFingerprint,
+    lastImportedAt: input.importedAt,
+    importedAgents: input.agentUpserts.map((entry) => ({
+      paperclipAgentId: agentIdByExternalKey.get(entry.externalAgentKey) ?? unreachable("Expected finalized agent id."),
+      externalAgentKey: entry.externalAgentKey,
+      repoRelPath: entry.repoRelPath,
+      fingerprint: entry.fingerprint,
+      canonicalLocator: entry.payload.metadata.canonicalLocator,
+      externalAgentName: entry.payload.metadata.externalAgentName,
+      lastImportedAt: entry.payload.metadata.lastImportedAt,
+      lastExportedFingerprint: entry.payload.metadata.lastExportedFingerprint,
+      lastExportedAt: entry.payload.metadata.lastExportedAt,
+    })),
+    importedSkills: input.skillUpserts.map((entry) => ({
+      paperclipSkillId: skillIdByExternalKey.get(entry.externalSkillKey) ?? unreachable("Expected finalized skill id."),
+      externalSkillKey: entry.externalSkillKey,
+      repoRelPath: entry.repoRelPath,
+      fingerprint: entry.fingerprint,
+      canonicalLocator: `${resolvedWorkspace.cwd}::${entry.repoRelPath}`,
+      externalSkillName: entry.payload.name,
+      lastImportedAt: input.importedAt,
+      lastExportedFingerprint: previousState.importedSkills.find(
+        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
+      )?.lastExportedFingerprint ?? null,
+      lastExportedAt: previousState.importedSkills.find(
+        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
+      )?.lastExportedAt ?? null,
+    })),
+    warnings: input.warnings,
+    conflicts: [],
+  });
+
+  await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
+  const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
+  await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), {
+    ...previewFromDiscovery(discovery),
+    warnings: input.warnings,
+    conflicts: [],
+  });
+  await logProjectActivity(ctx, {
+    companyId: input.companyId,
+    projectId: input.projectId,
+    message: "OpenCode import sync completed",
+    metadata: {
+      workspaceId: resolvedWorkspace.workspaceId,
+      importedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "create").length,
+      updatedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "update").length,
+      importedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "create").length,
+      updatedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "update").length,
+    },
+  });
+
+  return {
+    ok: true,
+    dryRun: false,
+    workspaceId: resolvedWorkspace.workspaceId,
+    importedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "create").length,
+    updatedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "update").length,
+    importedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "create").length,
+    updatedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "update").length,
+    warnings: input.warnings,
+    conflicts: [],
+    lastScanFingerprint: input.lastScanFingerprint,
   };
 }
 
@@ -731,17 +572,16 @@ async function exportProject(
       adapterConfig: agent.adapterConfig,
       metadata: agent.metadata,
     }));
-  const skills = await Promise.all(
-    syncState.importedSkills.map(async (entry: OpencodeProjectSyncManifestSkill) => {
-      const detail = await getCompanySkill(ctx, input.companyId, entry.paperclipSkillId);
-      return {
-        id: detail.id,
-        name: detail.name,
-        slug: detail.slug,
-        markdown: detail.markdown,
-      };
-    }),
-  );
+  const suppliedSkillDetails = new Map((input.skillDetails ?? []).map((entry: NonNullable<typeof input.skillDetails>[number]) => [entry.id, entry] as const));
+  const skills = syncState.importedSkills.flatMap((entry: OpencodeProjectSyncManifestSkill) => {
+    const detail = suppliedSkillDetails.get(entry.paperclipSkillId);
+    return detail ? [{
+      id: detail.id,
+      name: detail.name,
+      slug: detail.slug,
+      markdown: detail.markdown,
+    }] : [] as Array<{ id: string; name: string; slug: string; markdown: string }>;
+  });
 
   const plan = buildExportPlan({
     state: syncState,
@@ -770,20 +610,6 @@ async function exportProject(
 
   const writtenFiles: string[] = [];
   const exportedAt = new Date().toISOString();
-  if (input.exportAgents) {
-    for (const entry of syncState.importedAgents) {
-      const agent = agents.find((candidate: (typeof agents)[number]) => candidate.id === entry.paperclipAgentId) ?? null;
-      const metadataParsed = importedOpencodeAgentMetadataSchema.safeParse(agent?.metadata ?? null);
-      if (!metadataParsed.success || !agent) continue;
-      const metadata: ImportedOpencodeAgentMetadata = {
-        ...metadataParsed.data,
-        lastExportedAt: exportedAt,
-        lastExportedFingerprint: entry.fingerprint,
-      };
-      await updateAgent(ctx, agent.id, { metadata });
-    }
-  }
-
   for (const file of plan.files) {
     const validatedTarget = validateExportRepoRelPath(file.entityType, file.repoRelPath);
     if (!validatedTarget.ok) {
@@ -924,6 +750,22 @@ const plugin = definePlugin({
           projectId: parsed.projectId,
           message,
           metadata: { phase: parsed.mode, dryRun: parsed.dryRun },
+        });
+      }
+    });
+
+    ctx.actions.register(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, async (params: Record<string, unknown>) => {
+      const parsed = opencodeProjectFinalizeSyncInputSchema.parse(params);
+      try {
+        return await finalizeSyncProject(ctx, parsed);
+      } catch (error) {
+        if (isLoggedPluginError(error)) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        await logFailureAndThrow(ctx, {
+          companyId: parsed.companyId,
+          projectId: parsed.projectId,
+          message,
+          metadata: { phase: "finalize-sync" },
         });
       }
     });

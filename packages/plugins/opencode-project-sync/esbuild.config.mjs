@@ -1,5 +1,5 @@
 import esbuild from "esbuild";
-import { createPluginBundlerPresets } from "@paperclipai/plugin-sdk/bundlers";
+import { createPluginBundlerPresets } from "../sdk/dist/bundlers.js";
 
 const presets = createPluginBundlerPresets({
   workerEntry: "src/worker.ts",
@@ -7,6 +7,13 @@ const presets = createPluginBundlerPresets({
   uiEntry: "src/ui/index.tsx",
 });
 const watch = process.argv.includes("--watch");
+
+// Keep the worker on the SDK runtime contract instead of bundling the SDK root
+// entry, which also re-exports Node-only dev helpers that are irrelevant here.
+presets.esbuild.worker.external = [
+  ...(presets.esbuild.worker.external ?? []),
+  "@paperclipai/plugin-sdk",
+];
 
 const workerCtx = await esbuild.context(presets.esbuild.worker);
 const manifestCtx = await esbuild.context(presets.esbuild.manifest);

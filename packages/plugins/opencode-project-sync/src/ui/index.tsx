@@ -6,17 +6,20 @@ import {
   usePluginToast,
   type PluginDetailTabProps,
   type PluginProjectSidebarItemProps,
+  type PluginBridgeError,
 } from "@paperclipai/plugin-sdk/ui";
 import {
   OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
   OPENCODE_PROJECT_EXPORT_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
+  OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID,
   OPENCODE_PROJECT_SYNC_PLUGIN_ID,
   OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY,
   OPENCODE_PROJECT_SYNC_STATE_DATA_KEY,
   OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY,
 } from "../manifest.js";
+import { OPENCODE_PROJECT_HOST_API_BASE_PATH } from "../host-contract-constants.js";
 
 type Conflict = {
   code: string;
@@ -107,9 +110,46 @@ type SyncActionResult = {
   warnings?: string[];
 };
 
+type SyncPlanResult = SyncActionResult & {
+  ok: true;
+  dryRun: boolean;
+  workspaceId: string;
+  lastScanFingerprint: string;
+  sourceOfTruth: "repo_first" | "paperclip_export_guarded";
+  skillUpserts: Array<{
+    operation: "create" | "update";
+    paperclipSkillId: string | null;
+    externalSkillKey: string;
+    payload: { name: string; slug: string; markdown: string; filePath: string };
+  }>;
+  agentUpserts: Array<{
+    operation: "create" | "update";
+    paperclipAgentId: string | null;
+    externalAgentKey: string;
+    desiredSkillKeys: string[];
+    payload: {
+      name: string;
+      title: string | null;
+      adapterType: string;
+      adapterConfig: Record<string, unknown>;
+      metadata: Record<string, unknown>;
+    };
+  }>;
+};
+
 type ExportActionResult = {
   writtenFiles?: string[];
   warnings?: string[];
+};
+
+type SkillListItem = {
+  id: string;
+  slug: string;
+  name: string;
+};
+
+type SkillDetail = SkillListItem & {
+  markdown: string;
 };
 
 type LastActionState =
@@ -197,7 +237,139 @@ function formatDate(value: string | null | undefined): string {
 }
 
 function formatError(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error && typeof (error as PluginBridgeError).message === "string") {
+    return (error as PluginBridgeError).message;
+  }
   return error instanceof Error ? error.message : String(error);
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    const detail = body.trim().length > 0 ? ` ${body.trim()}` : "";
+    throw new Error(`Host API request failed (${response.status}) for ${url}.${detail}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return await response.json() as T;
+}
+
+function companyApiPath(companyId: string, suffix: string): string {
+  return `${OPENCODE_PROJECT_HOST_API_BASE_PATH}/companies/${encodeURIComponent(companyId)}${suffix}`;
+}
+
+function agentApiPath(agentId: string, suffix = ""): string {
+  return `${OPENCODE_PROJECT_HOST_API_BASE_PATH}/agents/${encodeURIComponent(agentId)}${suffix}`;
+}
+
+async function applySyncPlan(companyId: string, plan: SyncPlanResult) {
+  const skillIdByExternalKey = new Map<string, string>();
+  for (const upsert of plan.skillUpserts) {
+    let skillId = upsert.paperclipSkillId;
+    if (upsert.operation === "create") {
+      const created = await apiJson<{ id: string }>(companyApiPath(companyId, "/skills"), {
+        method: "POST",
+        body: JSON.stringify({
+          name: upsert.payload.name,
+          slug: upsert.payload.slug,
+          markdown: upsert.payload.markdown,
+        }),
+      });
+      skillId = created.id;
+    }
+    if (!skillId) {
+      throw new Error(`Skill '${upsert.externalSkillKey}' could not be mapped to a Paperclip skill id during sync.`);
+    }
+    // Company skill file edits target the managed skill package, not the source
+    // repo path tracked in plugin state for guarded export/provenance.
+    await apiJson(companyApiPath(companyId, `/skills/${encodeURIComponent(skillId)}/files`), {
+      method: "PATCH",
+      body: JSON.stringify({ path: "SKILL.md", content: upsert.payload.markdown }),
+    });
+    skillIdByExternalKey.set(upsert.externalSkillKey, skillId);
+  }
+
+  const agentIdByExternalKey = new Map<string, string>();
+  for (const upsert of plan.agentUpserts) {
+    let agentId = upsert.paperclipAgentId;
+    if (upsert.operation === "create") {
+      const created = await apiJson<{ id: string }>(companyApiPath(companyId, "/agents"), {
+        method: "POST",
+        body: JSON.stringify({
+          name: upsert.payload.name,
+          role: "general",
+          title: upsert.payload.title,
+          reportsTo: null,
+          adapterType: upsert.payload.adapterType,
+          adapterConfig: upsert.payload.adapterConfig,
+          metadata: upsert.payload.metadata,
+        }),
+      });
+      agentId = created.id;
+    } else if (agentId) {
+      await apiJson(agentApiPath(agentId), {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: upsert.payload.name,
+          title: upsert.payload.title,
+          adapterType: upsert.payload.adapterType,
+          adapterConfig: upsert.payload.adapterConfig,
+          metadata: upsert.payload.metadata,
+        }),
+      });
+    }
+    if (!agentId) {
+      throw new Error(`Agent '${upsert.externalAgentKey}' could not be mapped to a Paperclip agent id during sync.`);
+    }
+    agentIdByExternalKey.set(upsert.externalAgentKey, agentId);
+  }
+
+  for (const upsert of plan.agentUpserts) {
+    const agentId = agentIdByExternalKey.get(upsert.externalAgentKey);
+    if (!agentId) continue;
+    const metadata = upsert.payload.metadata as { reportsToExternalKey?: string | null };
+    const managerId = metadata.reportsToExternalKey ? agentIdByExternalKey.get(metadata.reportsToExternalKey) ?? null : null;
+    await apiJson(agentApiPath(agentId), {
+      method: "PATCH",
+      body: JSON.stringify({
+        reportsTo: managerId,
+        metadata: upsert.payload.metadata,
+      }),
+    });
+    await apiJson(agentApiPath(agentId, `/skills/sync?companyId=${encodeURIComponent(companyId)}`), {
+      method: "POST",
+      body: JSON.stringify({
+        desiredSkills: upsert.desiredSkillKeys
+          .map((skillKey) => skillIdByExternalKey.get(skillKey))
+          .filter((skillId): skillId is string => Boolean(skillId)),
+      }),
+    });
+  }
+
+  return {
+    appliedSkills: Array.from(skillIdByExternalKey, ([externalSkillKey, paperclipSkillId]) => ({ externalSkillKey, paperclipSkillId })),
+    appliedAgents: Array.from(agentIdByExternalKey, ([externalAgentKey, paperclipAgentId]) => ({ externalAgentKey, paperclipAgentId })),
+  };
+}
+
+async function fetchExportSkillDetails(companyId: string, state: SyncState): Promise<SkillDetail[]> {
+  const details: SkillDetail[] = [];
+  for (const entry of state.importedSkills) {
+    const detail = await apiJson<SkillDetail>(companyApiPath(companyId, `/skills/${encodeURIComponent(entry.paperclipSkillId)}`), {
+      method: "GET",
+    });
+    details.push(detail);
+  }
+  return details;
 }
 
 function buildProjectTabHref(companyPrefix: string | null, projectId: string): string {
@@ -251,6 +423,7 @@ function ProjectOpenCodePanel({ compact = false }: { compact?: boolean }): React
   const toast = usePluginToast();
   const bootstrapProject = usePluginAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY);
   const syncProject = usePluginAction(OPENCODE_PROJECT_SYNC_ACTION_KEY);
+  const finalizeSyncProject = usePluginAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY);
   const exportProject = usePluginAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY);
   const testRuntime = usePluginAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY);
 
@@ -273,6 +446,7 @@ function ProjectOpenCodePanel({ compact = false }: { compact?: boolean }): React
       companyPrefix={context.companyPrefix}
       bootstrapProject={bootstrapProject}
       syncProject={syncProject}
+      finalizeSyncProject={finalizeSyncProject}
       exportProject={exportProject}
       testRuntime={testRuntime}
     />
@@ -287,6 +461,7 @@ function ProjectOpenCodePanelLoaded({
   companyPrefix,
   bootstrapProject,
   syncProject,
+  finalizeSyncProject,
   exportProject,
   testRuntime,
 }: {
@@ -297,6 +472,7 @@ function ProjectOpenCodePanelLoaded({
   companyPrefix: string | null;
   bootstrapProject: (params?: Record<string, unknown>) => Promise<unknown>;
   syncProject: (params?: Record<string, unknown>) => Promise<unknown>;
+  finalizeSyncProject: (params?: Record<string, unknown>) => Promise<unknown>;
   exportProject: (params?: Record<string, unknown>) => Promise<unknown>;
   testRuntime: (params?: Record<string, unknown>) => Promise<unknown>;
 }): ReactElement {
@@ -368,7 +544,13 @@ function ProjectOpenCodePanelLoaded({
 
   function handleExport(): void {
     if (!state || !confirmGuardedExport()) return;
-    void runAction("export", () => exportProject({ companyId, projectId, exportAgents: true, exportSkills: true }), (result) => {
+    void runAction("export", async () => exportProject({
+      companyId,
+      projectId,
+      exportAgents: true,
+      exportSkills: true,
+      skillDetails: await fetchExportSkillDetails(companyId, state),
+    }), (result) => {
       const summary = result as ExportActionResult;
       setLastAction({
         kind: "success",
@@ -447,7 +629,23 @@ function ProjectOpenCodePanelLoaded({
             type="button"
             style={buttonStyle()}
             disabled={runningAction !== null}
-            onClick={() => void runAction("sync", () => syncProject({ companyId, projectId, mode: state?.lastImportedAt ? "refresh" : "import", dryRun: false }), (result) => {
+            onClick={() => void runAction("sync", async () => {
+              const plan = await syncProject({ companyId, projectId, mode: state?.lastImportedAt ? "refresh" : "import", dryRun: false }) as SyncPlanResult;
+              const { appliedSkills, appliedAgents } = await applySyncPlan(companyId, plan);
+              return await finalizeSyncProject({
+                companyId,
+                projectId,
+                workspaceId: plan.workspaceId,
+                importedAt: new Date().toISOString(),
+                lastScanFingerprint: plan.lastScanFingerprint,
+                warnings: plan.warnings ?? [],
+                sourceOfTruth: plan.sourceOfTruth,
+                skillUpserts: plan.skillUpserts,
+                agentUpserts: plan.agentUpserts,
+                appliedSkills,
+                appliedAgents,
+              });
+            }, (result) => {
               const summary = result as SyncActionResult;
               setLastAction({
                 kind: "success",
@@ -498,7 +696,23 @@ function ProjectOpenCodePanelLoaded({
             type="button"
             style={buttonStyle()}
             disabled={runningAction !== null}
-            onClick={() => void runAction("sync", () => syncProject({ companyId, projectId, mode: state?.lastImportedAt ? "refresh" : "import", dryRun: false }), (result) => {
+            onClick={() => void runAction("sync", async () => {
+              const plan = await syncProject({ companyId, projectId, mode: state?.lastImportedAt ? "refresh" : "import", dryRun: false }) as SyncPlanResult;
+              const { appliedSkills, appliedAgents } = await applySyncPlan(companyId, plan);
+              return await finalizeSyncProject({
+                companyId,
+                projectId,
+                workspaceId: plan.workspaceId,
+                importedAt: new Date().toISOString(),
+                lastScanFingerprint: plan.lastScanFingerprint,
+                warnings: plan.warnings ?? [],
+                sourceOfTruth: plan.sourceOfTruth,
+                skillUpserts: plan.skillUpserts,
+                agentUpserts: plan.agentUpserts,
+                appliedSkills,
+                appliedAgents,
+              });
+            }, (result) => {
               const summary = result as SyncActionResult;
               setLastAction({
                 kind: "success",
