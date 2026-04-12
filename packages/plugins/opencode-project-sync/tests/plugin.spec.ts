@@ -3,9 +3,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { act } from "../../../node_modules/react/index.js";
-import React from "../../../node_modules/react/index.js";
-import { createRoot } from "../../../node_modules/react-dom/client.js";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Company, Project } from "@paperclipai/plugin-sdk";
