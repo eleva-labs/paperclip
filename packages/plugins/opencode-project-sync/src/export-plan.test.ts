@@ -9,18 +9,21 @@ function makeState(): OpencodeProjectSyncState {
   return {
     projectId,
     workspaceId,
-    sourceOfTruth: "repo_first",
     bootstrapCompletedAt: null,
     canonicalRepoRoot: "/repos/canonical",
     canonicalRepoUrl: "https://example.com/acme/repo.git",
     canonicalRepoRef: "main",
     lastScanFingerprint: "scan-1",
-    lastScanCommit: null,
     lastImportedAt: null,
     lastExportedAt: null,
-    lastRuntimeTestAt: null,
-    lastRuntimeTestResult: null,
-    manifestVersion: 1,
+    manifestVersion: 2,
+    syncPolicy: {
+      mode: "top_level_agents_only",
+      syncSkills: false,
+      importRootAgentsMd: false,
+      importNestedAgents: false,
+    },
+    selectedAgents: [],
     importedAgents: [{
       paperclipAgentId: "agent-1",
       externalAgentKey: "researcher",
@@ -32,17 +35,7 @@ function makeState(): OpencodeProjectSyncState {
       lastExportedFingerprint: null,
       lastExportedAt: null,
     }],
-    importedSkills: [{
-      paperclipSkillId: "skill-1",
-      externalSkillKey: "research",
-      repoRelPath: ".opencode/skills/research/SKILL.md",
-      fingerprint: "fp-skill",
-      canonicalLocator: "/repos/canonical::.opencode/skills/research/SKILL.md",
-      externalSkillName: "Research",
-      lastImportedAt: null,
-      lastExportedFingerprint: null,
-      lastExportedAt: null,
-    }],
+    legacyOutOfScopeEntities: [],
     warnings: [],
     conflicts: [],
   };
@@ -68,15 +61,13 @@ describe("buildExportPlan", () => {
       currentRepoFingerprint: "scan-2",
       forceIfRepoUnchangedCheckFails: false,
       exportAgents: true,
-      exportSkills: true,
       agents: [],
-      skills: [],
     });
 
     expect(plan.blocked).toBe(true);
     expect(plan.files).toEqual([]);
     expect(plan.conflicts).toEqual([
-      expect.objectContaining({ code: "repo_changed_since_last_import" }),
+      expect.objectContaining({ code: "paperclip_entity_drift" }),
     ]);
   });
 
@@ -86,7 +77,6 @@ describe("buildExportPlan", () => {
       currentRepoFingerprint: "scan-1",
       forceIfRepoUnchangedCheckFails: false,
       exportAgents: true,
-      exportSkills: true,
       agents: [
         {
           id: "agent-1",
@@ -97,6 +87,7 @@ describe("buildExportPlan", () => {
           metadata: {
             syncManaged: true,
             sourceSystem: "opencode_project_repo",
+            syncPolicyMode: "top_level_agents_only",
             sourceOfTruth: "repo_first",
             projectId,
             workspaceId,
@@ -105,10 +96,8 @@ describe("buildExportPlan", () => {
             canonicalLocator: "/repos/canonical::.opencode/agents/researcher.md",
             externalAgentKey: "researcher",
             externalAgentName: "Researcher",
-            folderPath: null,
-            hierarchyMode: "metadata_only",
-            reportsToExternalKey: null,
-            desiredSkillKeys: ["research"],
+            importRole: "facade_entrypoint",
+            topLevelAgent: true,
             lastImportedFingerprint: "fp-agent",
             lastImportedAt: null,
             lastExportedFingerprint: null,
@@ -124,17 +113,12 @@ describe("buildExportPlan", () => {
           metadata: null,
         },
       ],
-      skills: [
-        { id: "skill-1", name: "Research", slug: "research", markdown: "# Research\n" },
-        { id: "skill-unmanaged", name: "Other", slug: "other", markdown: "# Other\n" },
-      ],
     });
 
     expect(plan.blocked).toBe(false);
     expect(plan.conflicts).toEqual([]);
     expect(plan.files.map((file) => file.repoRelPath)).toEqual([
       ".opencode/agents/researcher.md",
-      ".opencode/skills/research/SKILL.md",
     ]);
   });
 
@@ -144,7 +128,6 @@ describe("buildExportPlan", () => {
       currentRepoFingerprint: "scan-1",
       forceIfRepoUnchangedCheckFails: false,
       exportAgents: true,
-      exportSkills: false,
       agents: [{
         id: "agent-1",
         name: "Researcher",
@@ -153,7 +136,6 @@ describe("buildExportPlan", () => {
         adapterConfig: {},
         metadata: { syncManaged: false },
       }],
-      skills: [],
     });
 
     expect(plan.blocked).toBe(true);

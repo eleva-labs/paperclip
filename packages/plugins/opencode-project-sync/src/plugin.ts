@@ -24,24 +24,19 @@ import {
 import {
   buildImportPlan,
   type MinimalPaperclipAgent,
-  type MinimalPaperclipSkill,
 } from "./import-plan.js";
 import { writeContainedExportFile } from "./export-write-guard.js";
 import { buildExportPlan, validateExportRepoRelPath } from "./export-plan.js";
 import {
-  importedOpencodeAgentMetadataSchema,
   opencodeProjectFinalizeSyncInputSchema,
   opencodeProjectExportInputSchema,
   opencodeProjectResolveWorkspaceInputSchema,
   opencodeProjectSyncPlanResultSchema,
   opencodeProjectSyncNowInputSchema,
   opencodeProjectTestRuntimeInputSchema,
-  type ImportedOpencodeAgentMetadata,
   type OpencodeProjectAppliedAgentResult,
-  type OpencodeProjectAppliedSkillResult,
   type OpencodeProjectConflict,
   type OpencodeProjectSyncManifestAgent,
-  type OpencodeProjectSyncManifestSkill,
 } from "./schemas.js";
 import {
   OPENCODE_PROJECT_SYNC_MANIFEST_VERSION,
@@ -182,20 +177,23 @@ async function readOrCreateSyncState(
   return {
     projectId: resolvedWorkspace.projectId,
     workspaceId: resolvedWorkspace.workspaceId,
-    sourceOfTruth: "repo_first",
     bootstrapCompletedAt: null,
     canonicalRepoRoot: resolvedWorkspace.cwd,
     canonicalRepoUrl: resolvedWorkspace.repoUrl,
     canonicalRepoRef: resolvedWorkspace.repoRef,
     lastScanFingerprint: null,
-    lastScanCommit: null,
     lastImportedAt: null,
     lastExportedAt: null,
-    lastRuntimeTestAt: null,
-    lastRuntimeTestResult: null,
     manifestVersion: OPENCODE_PROJECT_SYNC_MANIFEST_VERSION,
+    syncPolicy: {
+      mode: "top_level_agents_only",
+      syncSkills: false,
+      importRootAgentsMd: false,
+      importNestedAgents: false,
+    },
+    selectedAgents: [],
     importedAgents: [],
-    importedSkills: [],
+    legacyOutOfScopeEntities: [],
     warnings: [],
     conflicts: [],
   };
@@ -260,23 +258,40 @@ function toMinimalAgent(agent: {
 
 function previewFromDiscovery(discovery: DiscoveredOpencodeProjectFiles) {
   return {
-    discoveredAgentCount: discovery.agents.length,
-    discoveredSkillCount: discovery.skills.length,
-    warnings: discovery.warnings,
     lastScanFingerprint: discovery.lastScanFingerprint,
-    supportedFiles: discovery.supportedFiles,
-    agents: discovery.agents.map((agent) => ({
+    eligibleAgents: discovery.eligibleAgents.map((agent) => ({
       externalAgentKey: agent.externalAgentKey,
       displayName: agent.displayName,
       repoRelPath: agent.repoRelPath,
-      desiredSkillKeys: agent.desiredSkillKeys,
+      fingerprint: agent.fingerprint,
+      role: agent.role,
+      advisoryMode: agent.advisoryMode,
+      selectionDefault: agent.selectionDefault,
     })),
-    skills: discovery.skills.map((skill) => ({
-      externalSkillKey: skill.externalSkillKey,
-      displayName: skill.displayName,
-      repoRelPath: skill.repoRelPath,
-    })),
+    ineligibleNestedAgents: discovery.ineligibleNestedAgents,
+    ignoredArtifacts: discovery.ignoredArtifacts,
+    warnings: discovery.warnings.map((warning) => warning.message),
   };
+}
+
+function reconcileSelectedAgents(
+  selectedAgentKeys: string[],
+  discovery: DiscoveredOpencodeProjectFiles,
+  selectedAt: string,
+): OpencodeProjectSyncState["selectedAgents"] {
+  const eligibleByKey = new Map(
+    discovery.eligibleAgents.map((agent) => [agent.externalAgentKey, agent] as const),
+  );
+  return selectedAgentKeys.flatMap((externalAgentKey) => {
+    const agent = eligibleByKey.get(externalAgentKey);
+    if (!agent) return [];
+    return [{
+      externalAgentKey,
+      repoRelPath: agent.repoRelPath,
+      fingerprint: agent.fingerprint,
+      selectedAt,
+    }];
+  });
 }
 
 async function bootstrapProject(
@@ -302,13 +317,14 @@ async function bootstrapProject(
   await logProjectActivity(ctx, {
     companyId: input.companyId,
     projectId: input.projectId,
-    message: "OpenCode project workspace bootstrap completed",
-    metadata: {
-      workspaceId: resolvedWorkspace.workspaceId,
-      discoveredAgentCount: discovery.agents.length,
-      discoveredSkillCount: discovery.skills.length,
-    },
-  });
+      message: "OpenCode project workspace bootstrap completed",
+      metadata: {
+        workspaceId: resolvedWorkspace.workspaceId,
+        discoveredEligibleAgentCount: discovery.eligibleAgents.length,
+        discoveredNestedAgentCount: discovery.ineligibleNestedAgents.length,
+        ignoredArtifactCount: discovery.ignoredArtifacts.length,
+      },
+    });
   return {
     ok: true,
     dryRun: false,
@@ -340,23 +356,17 @@ async function syncProject(
   const previousState = await readOrCreateSyncState(ctx, resolvedWorkspace);
   const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
   const existingAgents = (await ctx.agents.list({ companyId: input.companyId })).map(toMinimalAgent);
-  const existingSkills: MinimalPaperclipSkill[] = (previousState.importedSkills ?? []).map((entry: OpencodeProjectSyncManifestSkill) => ({
-    id: entry.paperclipSkillId,
-    key: entry.externalSkillKey,
-    slug: entry.externalSkillKey,
-    name: entry.externalSkillName ?? entry.externalSkillKey,
-  }));
   const importedAt = new Date().toISOString();
   const plan = buildImportPlan({
     companyId: input.companyId,
     projectId: input.projectId,
     workspaceId: resolvedWorkspace.workspaceId,
     repoRoot: resolvedWorkspace.cwd,
-    sourceOfTruth: previousState.sourceOfTruth,
+    sourceOfTruth: "repo_first",
     discovery,
+    selectedAgentKeys: input.selectedAgentKeys,
     existingState: previousState,
     existingAgents,
-    existingSkills,
     importedAt,
   });
 
@@ -371,11 +381,7 @@ async function syncProject(
       conflicts: plan.conflicts,
     });
     await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
-    await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), {
-      ...previewFromDiscovery(discovery),
-      warnings: plan.warnings,
-      conflicts: plan.conflicts,
-    });
+    await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), previewFromDiscovery(discovery));
     await logFailureAndThrow(ctx, {
       companyId: input.companyId,
       projectId: input.projectId,
@@ -384,48 +390,21 @@ async function syncProject(
     });
   }
 
-  if (input.dryRun) {
-    await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), {
-      ...previewFromDiscovery(discovery),
-      warnings: plan.warnings,
-      conflicts: plan.conflicts,
-      plannedAgentUpserts: plan.agentUpserts.map((entry) => ({
-        operation: entry.operation,
-        externalAgentKey: entry.externalAgentKey,
-        repoRelPath: entry.repoRelPath,
-      })),
-      plannedSkillUpserts: plan.skillUpserts.map((entry) => ({
-        operation: entry.operation,
-        externalSkillKey: entry.externalSkillKey,
-        repoRelPath: entry.repoRelPath,
-      })),
-    });
-    return {
-      ok: true,
-      dryRun: true,
-      workspaceId: resolvedWorkspace.workspaceId,
-      importedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "create").length,
-      updatedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "update").length,
-      importedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "create").length,
-      updatedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "update").length,
-      warnings: plan.warnings,
-      conflicts: plan.conflicts,
-      lastScanFingerprint: discovery.lastScanFingerprint,
-    };
-  }
+  await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), previewFromDiscovery(discovery));
 
   return opencodeProjectSyncPlanResultSchema.parse({
     ok: true,
-    dryRun: false,
+    dryRun: input.dryRun,
     workspaceId: resolvedWorkspace.workspaceId,
     importedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "create").length,
     updatedAgentCount: plan.agentUpserts.filter((entry) => entry.operation === "update").length,
-    importedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "create").length,
-    updatedSkillCount: plan.skillUpserts.filter((entry) => entry.operation === "update").length,
+    importedSkillCount: 0,
+    updatedSkillCount: 0,
     warnings: plan.warnings,
-    conflicts: [],
+    conflicts: plan.conflicts,
     lastScanFingerprint: discovery.lastScanFingerprint,
     sourceOfTruth: plan.sourceOfTruth,
+    preview: previewFromDiscovery(discovery),
     skillUpserts: plan.skillUpserts,
     agentUpserts: plan.agentUpserts,
   });
@@ -446,19 +425,11 @@ async function finalizeSyncProject(
   }
 
   const previousState = await readOrCreateSyncState(ctx, resolvedWorkspace);
-  const skillIdByExternalKey = new Map(input.appliedSkills.map((entry: OpencodeProjectAppliedSkillResult) => [entry.externalSkillKey, entry.paperclipSkillId] as const));
   const agentIdByExternalKey = new Map(input.appliedAgents.map((entry: OpencodeProjectAppliedAgentResult) => [entry.externalAgentKey, entry.paperclipAgentId] as const));
-
-  for (const upsert of input.skillUpserts) {
-    if (!skillIdByExternalKey.get(upsert.externalSkillKey)) {
-      await logFailureAndThrow(ctx, {
-        companyId: input.companyId,
-        projectId: input.projectId,
-        message: `Skill '${upsert.externalSkillKey}' could not be mapped to a Paperclip skill id during sync finalization.`,
-        metadata: { workspaceId: resolvedWorkspace.workspaceId },
-      });
-    }
-  }
+  const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
+  const eligibleAgentsByKey = new Map(
+    discovery.eligibleAgents.map((agent) => [agent.externalAgentKey, agent] as const),
+  );
 
   for (const upsert of input.agentUpserts) {
     if (!agentIdByExternalKey.get(upsert.externalAgentKey)) {
@@ -479,53 +450,39 @@ async function finalizeSyncProject(
     canonicalRepoRef: resolvedWorkspace.repoRef,
     lastScanFingerprint: input.lastScanFingerprint,
     lastImportedAt: input.importedAt,
-    importedAgents: input.agentUpserts.map((entry) => ({
+    importedAgents: input.agentUpserts.map((entry: typeof input.agentUpserts[number]) => ({
       paperclipAgentId: agentIdByExternalKey.get(entry.externalAgentKey) ?? unreachable("Expected finalized agent id."),
       externalAgentKey: entry.externalAgentKey,
       repoRelPath: entry.repoRelPath,
       fingerprint: entry.fingerprint,
-      canonicalLocator: entry.payload.metadata.canonicalLocator,
-      externalAgentName: entry.payload.metadata.externalAgentName,
-      lastImportedAt: entry.payload.metadata.lastImportedAt,
-      lastExportedFingerprint: entry.payload.metadata.lastExportedFingerprint,
-      lastExportedAt: entry.payload.metadata.lastExportedAt,
-    })),
-    importedSkills: input.skillUpserts.map((entry) => ({
-      paperclipSkillId: skillIdByExternalKey.get(entry.externalSkillKey) ?? unreachable("Expected finalized skill id."),
-      externalSkillKey: entry.externalSkillKey,
-      repoRelPath: entry.repoRelPath,
-      fingerprint: entry.fingerprint,
       canonicalLocator: `${resolvedWorkspace.cwd}::${entry.repoRelPath}`,
-      externalSkillName: entry.payload.name,
+      externalAgentName: eligibleAgentsByKey.get(entry.externalAgentKey)?.displayName ?? entry.externalAgentKey,
       lastImportedAt: input.importedAt,
-      lastExportedFingerprint: previousState.importedSkills.find(
-        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
+      lastExportedFingerprint: previousState.importedAgents.find(
+        (agent: OpencodeProjectSyncManifestAgent) => agent.externalAgentKey === entry.externalAgentKey,
       )?.lastExportedFingerprint ?? null,
-      lastExportedAt: previousState.importedSkills.find(
-        (skill: OpencodeProjectSyncManifestSkill) => skill.externalSkillKey === entry.externalSkillKey,
+      lastExportedAt: previousState.importedAgents.find(
+        (agent: OpencodeProjectSyncManifestAgent) => agent.externalAgentKey === entry.externalAgentKey,
       )?.lastExportedAt ?? null,
     })),
+    selectedAgents: reconcileSelectedAgents(input.selectedAgentKeys, discovery, input.importedAt),
+    legacyOutOfScopeEntities: previousState.legacyOutOfScopeEntities,
     warnings: input.warnings,
     conflicts: [],
   });
 
   await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
-  const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
-  await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), {
-    ...previewFromDiscovery(discovery),
-    warnings: input.warnings,
-    conflicts: [],
-  });
+  await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), previewFromDiscovery(discovery));
   await logProjectActivity(ctx, {
     companyId: input.companyId,
     projectId: input.projectId,
     message: "OpenCode import sync completed",
     metadata: {
       workspaceId: resolvedWorkspace.workspaceId,
-      importedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "create").length,
-      updatedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "update").length,
-      importedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "create").length,
-      updatedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "update").length,
+      importedAgentCount: input.agentUpserts.filter((entry: typeof input.agentUpserts[number]) => entry.operation === "create").length,
+      updatedAgentCount: input.agentUpserts.filter((entry: typeof input.agentUpserts[number]) => entry.operation === "update").length,
+      importedSkillCount: 0,
+      updatedSkillCount: 0,
     },
   });
 
@@ -533,10 +490,10 @@ async function finalizeSyncProject(
     ok: true,
     dryRun: false,
     workspaceId: resolvedWorkspace.workspaceId,
-    importedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "create").length,
-    updatedAgentCount: input.agentUpserts.filter((entry) => entry.operation === "update").length,
-    importedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "create").length,
-    updatedSkillCount: input.skillUpserts.filter((entry) => entry.operation === "update").length,
+    importedAgentCount: input.agentUpserts.filter((entry: typeof input.agentUpserts[number]) => entry.operation === "create").length,
+    updatedAgentCount: input.agentUpserts.filter((entry: typeof input.agentUpserts[number]) => entry.operation === "update").length,
+    importedSkillCount: 0,
+    updatedSkillCount: 0,
     warnings: input.warnings,
     conflicts: [],
     lastScanFingerprint: input.lastScanFingerprint,
@@ -572,25 +529,13 @@ async function exportProject(
       adapterConfig: agent.adapterConfig,
       metadata: agent.metadata,
     }));
-  const suppliedSkillDetails = new Map((input.skillDetails ?? []).map((entry: NonNullable<typeof input.skillDetails>[number]) => [entry.id, entry] as const));
-  const skills = syncState.importedSkills.flatMap((entry: OpencodeProjectSyncManifestSkill) => {
-    const detail = suppliedSkillDetails.get(entry.paperclipSkillId);
-    return detail ? [{
-      id: detail.id,
-      name: detail.name,
-      slug: detail.slug,
-      markdown: detail.markdown,
-    }] : [] as Array<{ id: string; name: string; slug: string; markdown: string }>;
-  });
 
   const plan = buildExportPlan({
     state: syncState,
     currentRepoFingerprint: discovery.lastScanFingerprint,
     forceIfRepoUnchangedCheckFails: input.forceIfRepoUnchangedCheckFails,
     exportAgents: input.exportAgents,
-    exportSkills: input.exportSkills,
     agents,
-    skills,
   });
 
   if (plan.blocked) {
@@ -651,23 +596,12 @@ async function exportProject(
     };
   });
 
-  const nextImportedSkills = syncState.importedSkills.map((entry: OpencodeProjectSyncManifestSkill) => {
-    const exportedFile = plan.files.find((file) => file.entityType === "skill" && file.entityId === entry.paperclipSkillId);
-    if (!exportedFile) return entry;
-    return {
-      ...entry,
-      lastExportedFingerprint: exportedFile.fingerprint,
-      lastExportedAt: exportedAt,
-    };
-  });
-
   const nextState = opencodeProjectSyncStateSchema.parse({
     ...syncState,
     warnings: plan.warnings,
     conflicts: [],
     lastExportedAt: exportedAt,
     importedAgents: nextImportedAgents,
-    importedSkills: nextImportedSkills,
   });
   await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
   await logProjectActivity(ctx, {
@@ -801,13 +735,6 @@ const plugin = definePlugin({
           workspaceMode: parsed.workspaceMode,
         },
       };
-
-      const nextState = opencodeProjectSyncStateSchema.parse({
-        ...state,
-        lastRuntimeTestAt: new Date().toISOString(),
-        lastRuntimeTestResult: result,
-      });
-      await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
 
       return result;
     });

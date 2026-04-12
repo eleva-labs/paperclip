@@ -12,20 +12,23 @@ function makeState(): OpencodeProjectSyncState {
   return {
     projectId,
     workspaceId,
-    sourceOfTruth: "repo_first",
     bootstrapCompletedAt: null,
     canonicalRepoRoot: repoRoot,
     canonicalRepoUrl: "https://example.com/acme/repo.git",
     canonicalRepoRef: "main",
     lastScanFingerprint: "scan-1",
-    lastScanCommit: null,
     lastImportedAt: null,
     lastExportedAt: null,
-    lastRuntimeTestAt: null,
-    lastRuntimeTestResult: null,
-    manifestVersion: 1,
+    manifestVersion: 2,
+    syncPolicy: {
+      mode: "top_level_agents_only",
+      syncSkills: false,
+      importRootAgentsMd: false,
+      importNestedAgents: false,
+    },
+    selectedAgents: [],
     importedAgents: [],
-    importedSkills: [],
+    legacyOutOfScopeEntities: [],
     warnings: [],
     conflicts: [],
   };
@@ -45,17 +48,6 @@ describe("buildImportPlan", () => {
       lastExportedFingerprint: null,
       lastExportedAt: null,
     }];
-    state.importedSkills = [{
-      paperclipSkillId: "skill-1",
-      externalSkillKey: "research",
-      repoRelPath: ".opencode/skills/research/SKILL.md",
-      fingerprint: "fp-skill-old",
-      canonicalLocator: `${repoRoot}::.opencode/skills/research/SKILL.md`,
-      externalSkillName: "Research",
-      lastImportedAt: importedAt,
-      lastExportedFingerprint: null,
-      lastExportedAt: null,
-    }];
 
     const plan = buildImportPlan({
       companyId,
@@ -63,9 +55,9 @@ describe("buildImportPlan", () => {
       workspaceId,
       repoRoot,
       sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["researcher"],
       importedAt,
       existingState: state,
-      existingSkills: [{ id: "skill-1", key: "research", slug: "research", name: "Research" }],
       existingAgents: [{
         id: "agent-1",
         name: "Researcher",
@@ -76,6 +68,7 @@ describe("buildImportPlan", () => {
         metadata: {
           syncManaged: true,
           sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
           sourceOfTruth: "repo_first",
           projectId,
           workspaceId,
@@ -84,10 +77,8 @@ describe("buildImportPlan", () => {
           canonicalLocator: `${repoRoot}::.opencode/agents/researcher.md`,
           externalAgentKey: "researcher",
           externalAgentName: "Researcher",
-          folderPath: null,
-          hierarchyMode: "metadata_only",
-          reportsToExternalKey: null,
-          desiredSkillKeys: ["research"],
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
           lastImportedFingerprint: "fp-agent-old",
           lastImportedAt: importedAt,
           lastExportedFingerprint: null,
@@ -96,42 +87,28 @@ describe("buildImportPlan", () => {
       }],
       discovery: {
         warnings: [],
-        skills: [{
-          externalSkillKey: "research",
-          displayName: "Research",
-          repoRelPath: ".opencode/skills/research/SKILL.md",
-          markdown: "# Research\n",
-          fileInventory: [{ path: ".opencode/skills/research/SKILL.md", kind: "skill" }],
-          fingerprint: "fp-skill-new",
-        }],
-        agents: [{
+        eligibleAgents: [{
           externalAgentKey: "researcher",
           displayName: "Researcher",
           role: "Lead researcher",
           repoRelPath: ".opencode/agents/researcher.md",
-          folderPath: null,
-          reportsToExternalKey: null,
           instructionsMarkdown: "# Researcher\n",
-          desiredSkillKeys: ["research"],
-          adapterDefaults: { model: "openai/gpt-5.4" },
+          advisoryMode: null,
+          selectionDefault: false,
           fingerprint: "fp-agent-new",
         }],
       },
     });
 
     expect(plan.conflicts).toEqual([]);
-    expect(plan.skillUpserts).toEqual([
-      expect.objectContaining({ operation: "update", paperclipSkillId: "skill-1" }),
-    ]);
+    expect(plan.skillUpserts).toEqual([]);
     expect(plan.agentUpserts).toEqual([
       expect.objectContaining({
         operation: "update",
         paperclipAgentId: "agent-1",
-        desiredSkillKeys: ["research"],
         payload: expect.objectContaining({
           adapterType: "opencode_project_local",
           adapterConfig: expect.objectContaining({
-            model: "openai/gpt-5.4",
             allowProjectConfig: true,
             syncPluginKey: "paperclip-opencode-project",
           }),
@@ -147,40 +124,39 @@ describe("buildImportPlan", () => {
       workspaceId,
       repoRoot,
       sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["missing", "researcher"],
       importedAt,
       existingState: makeState(),
-      existingSkills: [],
       existingAgents: [],
       discovery: {
         warnings: [{
-          code: "ambiguous_repo_layout",
-          message: "Mixed layouts are blocked.",
-          repoRelPath: ".opencode/agents",
+          code: "invalid_repo_file",
+          message: "Repo-root opencode.json exists but could not be parsed as a JSON object.",
+          repoRelPath: "opencode.json",
           entityType: "workspace",
           entityKey: null,
         }],
-        skills: [],
-        agents: [{
+        eligibleAgents: [{
           externalAgentKey: "researcher",
           displayName: "Researcher",
           role: null,
           repoRelPath: ".opencode/agents/researcher.md",
-          folderPath: null,
-          reportsToExternalKey: null,
           instructionsMarkdown: "# Researcher\n",
-          desiredSkillKeys: ["missing-skill"],
-          adapterDefaults: {},
+          advisoryMode: null,
+          selectionDefault: false,
           fingerprint: "fp-agent",
         }],
       },
     });
 
     expect(plan.conflicts).toEqual([
-      expect.objectContaining({ code: "ambiguous_repo_layout" }),
+      expect.objectContaining({ code: "invalid_selection", entityKey: "missing" }),
     ]);
     expect(plan.warnings).toEqual([
-      "Agent 'Researcher' references unknown repo skill keys: missing-skill.",
+      "Repo-root opencode.json exists but could not be parsed as a JSON object.",
     ]);
-    expect(plan.agentUpserts[0]?.desiredSkillKeys).toEqual([]);
+    expect(plan.agentUpserts).toEqual([
+      expect.objectContaining({ externalAgentKey: "researcher" }),
+    ]);
   });
 });

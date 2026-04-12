@@ -1,16 +1,17 @@
 import { z } from "@paperclipai/plugin-sdk";
 import {
+  opencodeLegacyOutOfScopeEntitySchema,
+  opencodeProjectSyncPolicySchema,
+  opencodeSelectedAgentSchema,
   opencodeProjectConflictSchema,
-  opencodeProjectSourceOfTruthSchema,
   opencodeProjectSyncManifestAgentSchema,
-  opencodeProjectSyncManifestSkillSchema,
 } from "./schemas.js";
 
 export const OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND = "project_workspace" as const;
 export const OPENCODE_PROJECT_SYNC_STATE_NAMESPACE = "opencode-project-sync";
 export const OPENCODE_PROJECT_SYNC_STATE_KEY = "state";
 export const OPENCODE_PROJECT_SYNC_LAST_PREVIEW_KEY = "last-preview";
-export const OPENCODE_PROJECT_SYNC_MANIFEST_VERSION = 1 as const;
+export const OPENCODE_PROJECT_SYNC_MANIFEST_VERSION = 2 as const;
 
 export const opencodeProjectRuntimeTestResultSchema = z.object({
   ok: z.boolean(),
@@ -21,20 +22,18 @@ export const opencodeProjectRuntimeTestResultSchema = z.object({
 export const opencodeProjectSyncStateSchema = z.object({
   projectId: z.string().uuid(),
   workspaceId: z.string().uuid(),
-  sourceOfTruth: opencodeProjectSourceOfTruthSchema,
-  bootstrapCompletedAt: z.string().datetime().nullable(),
   canonicalRepoRoot: z.string().min(1),
   canonicalRepoUrl: z.string().url().nullable(),
   canonicalRepoRef: z.string().min(1).nullable(),
+  bootstrapCompletedAt: z.string().datetime().nullable(),
   lastScanFingerprint: z.string().min(1).nullable(),
-  lastScanCommit: z.string().min(1).nullable(),
   lastImportedAt: z.string().datetime().nullable(),
   lastExportedAt: z.string().datetime().nullable(),
-  lastRuntimeTestAt: z.string().datetime().nullable(),
-  lastRuntimeTestResult: opencodeProjectRuntimeTestResultSchema.nullable().optional(),
   manifestVersion: z.literal(OPENCODE_PROJECT_SYNC_MANIFEST_VERSION),
+  syncPolicy: opencodeProjectSyncPolicySchema,
+  selectedAgents: z.array(opencodeSelectedAgentSchema),
   importedAgents: z.array(opencodeProjectSyncManifestAgentSchema),
-  importedSkills: z.array(opencodeProjectSyncManifestSkillSchema),
+  legacyOutOfScopeEntities: z.array(opencodeLegacyOutOfScopeEntitySchema),
   warnings: z.array(z.string()),
   conflicts: z.array(opencodeProjectConflictSchema),
 });

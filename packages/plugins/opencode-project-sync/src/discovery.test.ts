@@ -25,56 +25,86 @@ afterEach(() => {
 });
 
 describe("discoverOpencodeProjectFiles", () => {
-  it("discovers supported MVP roots and derives stable agent/skill identities", () => {
+  it("returns top-level eligible agents with selectionDefault false", () => {
     const repoRoot = makeTempRepo();
-    writeFile(repoRoot, "opencode.json", JSON.stringify({ paperclip: { model: "openai/gpt-5.4" } }, null, 2));
-    writeFile(repoRoot, "AGENTS.md", "# Repository Guide\n");
-    writeFile(
-      repoRoot,
-      ".opencode/skills/research/SKILL.md",
-      "---\nname: Research Skill\n---\n# Research\n",
-    );
-    writeFile(
-      repoRoot,
-      ".opencode/agents/researcher.md",
-      "---\nname: Researcher\ndesiredSkills:\n  - research\n---\n# Researcher\n",
-    );
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "---\nname: Researcher\n---\n# Researcher\n");
 
     const result = discoverOpencodeProjectFiles({ repoRoot });
 
-    expect(result.warnings).toEqual([]);
-    expect(result.supportedFiles).toEqual(expect.arrayContaining([
-      "AGENTS.md",
-      "opencode.json",
-      ".opencode/agents/researcher.md",
-      ".opencode/skills/research/SKILL.md",
-    ]));
-    expect(result.agents).toEqual([
+    expect(result.eligibleAgents).toEqual([
       expect.objectContaining({
         externalAgentKey: "researcher",
-        desiredSkillKeys: ["research"],
-        adapterDefaults: { model: "openai/gpt-5.4" },
+        repoRelPath: ".opencode/agents/researcher.md",
+        selectionDefault: false,
       }),
     ]);
-    expect(result.skills).toEqual(expect.arrayContaining([
-      expect.objectContaining({ externalSkillKey: "research" }),
-      expect.objectContaining({ externalSkillKey: "repo-root-agents" }),
-    ]));
-    expect(result.lastScanFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.ineligibleNestedAgents).toEqual([]);
+    expect(result.ignoredArtifacts).toEqual([]);
   });
 
-  it("blocks ambiguous mixed agent layouts and legacy skill roots with actionable warnings", () => {
+  it("excludes nested agents and keeps them in context output only", () => {
     const repoRoot = makeTempRepo();
-    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Standard\n");
-    writeFile(repoRoot, ".opencode/agents/agents/researcher.md", "# Compat\n");
-    writeFile(repoRoot, ".opencode/agents/skills/legacy/SKILL.md", "# Legacy\n");
+    writeFile(repoRoot, ".opencode/agents/engineering/systems-architect.md", "---\nname: Systems Architect\n---\n# Systems Architect\n");
 
     const result = discoverOpencodeProjectFiles({ repoRoot });
 
-    expect(result.agents).toEqual([]);
+    expect(result.eligibleAgents).toEqual([]);
+    expect(result.ineligibleNestedAgents).toEqual([
+      expect.objectContaining({
+        externalAgentKey: "engineering-systems-architect",
+        repoRelPath: ".opencode/agents/engineering/systems-architect.md",
+      }),
+    ]);
+  });
+
+  it("ignores root AGENTS and skill artifacts for import planning while surfacing them", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, "AGENTS.md", "# Repository Guide\n");
+    writeFile(repoRoot, ".opencode/skills/research/SKILL.md", "# Research\n");
+    writeFile(repoRoot, ".opencode/skills/research/notes.md", "notes\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Researcher\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toHaveLength(1);
+    expect(result.ignoredArtifacts).toEqual(expect.arrayContaining([
+      { kind: "root_agents_md", repoRelPath: "AGENTS.md" },
+      { kind: "skill", repoRelPath: ".opencode/skills/research/SKILL.md" },
+      { kind: "skill", repoRelPath: ".opencode/skills/research/notes.md" },
+    ]));
+  });
+
+  it("emits identity collision warnings for duplicate top-level agent keys", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# One\n");
+    writeFile(repoRoot, ".opencode/agents/researcher!.md", "# Two\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
     expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: "ambiguous_repo_layout", repoRelPath: ".opencode/agents" }),
-      expect.objectContaining({ code: "ambiguous_repo_layout", repoRelPath: ".opencode/agents/skills" }),
+      expect.objectContaining({
+        code: "identity_collision",
+        entityKey: "researcher",
+      }),
+    ]));
+  });
+
+  it("uses folder depth as source of truth and emits advisory warnings for contradictory mode", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "---\nmode: subagent\n---\n# Orchestrator\n");
+    writeFile(repoRoot, ".opencode/agents/team/qa.md", "---\nmode: primary\n---\n# QA\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toEqual([
+      expect.objectContaining({ externalAgentKey: "orchestrator", advisoryMode: "subagent" }),
+    ]);
+    expect(result.ineligibleNestedAgents).toEqual([
+      expect.objectContaining({ externalAgentKey: "team-qa" }),
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "contradictory_advisory_mode", repoRelPath: ".opencode/agents/orchestrator.md" }),
+      expect.objectContaining({ code: "contradictory_advisory_mode", repoRelPath: ".opencode/agents/team/qa.md" }),
     ]));
   });
 });

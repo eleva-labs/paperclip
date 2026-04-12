@@ -5,6 +5,62 @@ export const opencodeProjectSourceOfTruthSchema = z.enum([
   "paperclip_export_guarded",
 ]);
 
+export const opencodeProjectSyncPolicySchema = z.object({
+  mode: z.literal("top_level_agents_only"),
+  syncSkills: z.literal(false),
+  importRootAgentsMd: z.literal(false),
+  importNestedAgents: z.literal(false),
+});
+
+export const opencodeEligibleAgentSchema = z.object({
+  externalAgentKey: z.string().min(1),
+  displayName: z.string().min(1),
+  repoRelPath: z.string().min(1),
+  fingerprint: z.string().min(1),
+  role: z.string().min(1).nullable(),
+  advisoryMode: z.enum(["primary", "subagent"]).nullable(),
+  selectionDefault: z.boolean(),
+});
+
+export const opencodeIneligibleNestedAgentSchema = z.object({
+  externalAgentKey: z.string().min(1),
+  displayName: z.string().min(1),
+  repoRelPath: z.string().min(1),
+});
+
+export const opencodeIgnoredArtifactSchema = z.object({
+  kind: z.enum(["skill", "root_agents_md", "other"]),
+  repoRelPath: z.string().min(1),
+});
+
+export const opencodeTopLevelAgentPreviewSchema = z.object({
+  lastScanFingerprint: z.string().min(1),
+  eligibleAgents: z.array(opencodeEligibleAgentSchema),
+  ineligibleNestedAgents: z.array(opencodeIneligibleNestedAgentSchema),
+  ignoredArtifacts: z.array(opencodeIgnoredArtifactSchema),
+  warnings: z.array(z.string()),
+});
+
+export const opencodeSelectedAgentSchema = z.object({
+  externalAgentKey: z.string().min(1),
+  repoRelPath: z.string().min(1),
+  fingerprint: z.string().min(1),
+  selectedAt: z.string().datetime(),
+});
+
+export const opencodeLegacyOutOfScopeEntitySchema = z.object({
+  entityType: z.enum(["agent", "skill"]),
+  paperclipId: z.string().uuid(),
+  externalKey: z.string().min(1),
+  repoRelPath: z.string().min(1).nullable(),
+  reason: z.enum([
+    "nested_agent_no_longer_supported",
+    "skill_sync_removed",
+    "root_agents_md_no_longer_supported",
+  ]),
+  detectedAt: z.string().datetime(),
+});
+
 export const opencodeProjectResolveWorkspaceInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -16,6 +72,7 @@ export const opencodeProjectSyncNowInputSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   mode: z.enum(["bootstrap", "import", "refresh"]).default("import"),
   dryRun: z.boolean().default(false),
+  selectedAgentKeys: z.array(z.string().min(1)).default([]),
 });
 
 export const opencodeProjectExportInputSchema = z.object({
@@ -23,14 +80,7 @@ export const opencodeProjectExportInputSchema = z.object({
   projectId: z.string().uuid(),
   workspaceId: z.string().uuid().optional(),
   exportAgents: z.boolean().default(true),
-  exportSkills: z.boolean().default(false),
   forceIfRepoUnchangedCheckFails: z.boolean().default(false),
-  skillDetails: z.array(z.object({
-    id: z.string().uuid(),
-    name: z.string().min(1),
-    slug: z.string().min(1),
-    markdown: z.string(),
-  })).optional(),
 });
 
 export const opencodeProjectTestRuntimeInputSchema = z.object({
@@ -42,22 +92,21 @@ export const opencodeProjectTestRuntimeInputSchema = z.object({
 
 export const opencodeProjectConflictSchema = z.object({
   code: z.enum([
-    "ambiguous_repo_layout",
     "identity_collision",
+    "invalid_selection",
     "paperclip_entity_drift",
-    "repo_changed_since_last_import",
-    "export_target_changed",
   ]),
   message: z.string().min(1),
   repoRelPath: z.string().min(1).nullable(),
-  entityType: z.enum(["agent", "skill", "workspace"]).nullable(),
+  entityType: z.enum(["agent", "workspace"]).nullable(),
   entityKey: z.string().min(1).nullable(),
 });
 
-export const importedOpencodeAgentMetadataSchema = z.object({
+export const importedOpencodeFacadeAgentMetadataSchema = z.object({
   syncManaged: z.literal(true),
   sourceSystem: z.literal("opencode_project_repo"),
-  sourceOfTruth: opencodeProjectSourceOfTruthSchema,
+  syncPolicyMode: z.literal("top_level_agents_only"),
+  sourceOfTruth: opencodeProjectSourceOfTruthSchema.optional(),
   projectId: z.string().uuid(),
   workspaceId: z.string().uuid(),
   repoRoot: z.string().min(1),
@@ -65,15 +114,19 @@ export const importedOpencodeAgentMetadataSchema = z.object({
   canonicalLocator: z.string().min(1),
   externalAgentKey: z.string().min(1),
   externalAgentName: z.string().min(1),
-  folderPath: z.string().min(1).nullable(),
-  hierarchyMode: z.enum(["reports_to", "metadata_only"]),
-  reportsToExternalKey: z.string().min(1).nullable(),
-  desiredSkillKeys: z.array(z.string().min(1)).default([]),
+  importRole: z.literal("facade_entrypoint"),
+  topLevelAgent: z.literal(true),
+  folderPath: z.string().min(1).nullable().optional(),
+  hierarchyMode: z.enum(["reports_to", "metadata_only"]).optional(),
+  reportsToExternalKey: z.string().min(1).nullable().optional(),
+  desiredSkillKeys: z.array(z.string().min(1)).optional(),
   lastImportedFingerprint: z.string().min(1).nullable(),
   lastImportedAt: z.string().datetime().nullable(),
   lastExportedFingerprint: z.string().min(1).nullable(),
   lastExportedAt: z.string().datetime().nullable(),
 });
+
+export const importedOpencodeAgentMetadataSchema = importedOpencodeFacadeAgentMetadataSchema;
 
 export const importedOpencodeSkillMetadataSchema = z.object({
   syncManaged: z.literal(true),
@@ -92,19 +145,7 @@ export const importedOpencodeSkillMetadataSchema = z.object({
   lastExportedAt: z.string().datetime().nullable(),
 });
 
-export const opencodeProjectPlannedSkillUpsertSchema = z.object({
-  operation: z.enum(["create", "update"]),
-  paperclipSkillId: z.string().uuid().nullable(),
-  externalSkillKey: z.string().min(1),
-  repoRelPath: z.string().min(1),
-  fingerprint: z.string().min(1),
-  payload: z.object({
-    name: z.string().min(1),
-    slug: z.string().min(1),
-    markdown: z.string(),
-    filePath: z.string().min(1),
-  }),
-});
+export const opencodeProjectPlannedSkillUpsertSchema = z.array(z.never()).max(0);
 
 export const opencodeProjectPlannedAgentUpsertSchema = z.object({
   operation: z.enum(["create", "update"]),
@@ -112,14 +153,13 @@ export const opencodeProjectPlannedAgentUpsertSchema = z.object({
   externalAgentKey: z.string().min(1),
   repoRelPath: z.string().min(1),
   fingerprint: z.string().min(1),
-  desiredSkillKeys: z.array(z.string().min(1)),
   payload: z.object({
     name: z.string().min(1),
     title: z.string().min(1).nullable(),
-    reportsToExternalKey: z.string().min(1).nullable(),
+    reportsTo: z.null(),
     adapterType: z.string().min(1),
     adapterConfig: z.record(z.string(), z.unknown()),
-    metadata: importedOpencodeAgentMetadataSchema,
+    metadata: importedOpencodeFacadeAgentMetadataSchema,
   }),
 });
 
@@ -129,20 +169,18 @@ export const opencodeProjectSyncPlanResultSchema = z.object({
   workspaceId: z.string().uuid(),
   importedAgentCount: z.number().int().nonnegative(),
   updatedAgentCount: z.number().int().nonnegative(),
-  importedSkillCount: z.number().int().nonnegative(),
-  updatedSkillCount: z.number().int().nonnegative(),
+  importedSkillCount: z.literal(0),
+  updatedSkillCount: z.literal(0),
   warnings: z.array(z.string()),
   conflicts: z.array(opencodeProjectConflictSchema),
   lastScanFingerprint: z.string().min(1),
   sourceOfTruth: opencodeProjectSourceOfTruthSchema,
-  skillUpserts: z.array(opencodeProjectPlannedSkillUpsertSchema),
+  preview: opencodeTopLevelAgentPreviewSchema.optional(),
   agentUpserts: z.array(opencodeProjectPlannedAgentUpsertSchema),
+  skillUpserts: z.array(z.never()).default([]),
 });
 
-export const opencodeProjectAppliedSkillResultSchema = z.object({
-  externalSkillKey: z.string().min(1),
-  paperclipSkillId: z.string().uuid(),
-});
+export const opencodeProjectAppliedSkillResultSchema = z.array(z.never()).max(0);
 
 export const opencodeProjectAppliedAgentResultSchema = z.object({
   externalAgentKey: z.string().min(1),
@@ -155,11 +193,15 @@ export const opencodeProjectFinalizeSyncInputSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   importedAt: z.string().datetime(),
   lastScanFingerprint: z.string().min(1),
+  selectedAgentKeys: z.array(z.string().min(1)),
   warnings: z.array(z.string()),
-  sourceOfTruth: opencodeProjectSourceOfTruthSchema,
-  skillUpserts: z.array(opencodeProjectPlannedSkillUpsertSchema),
-  agentUpserts: z.array(opencodeProjectPlannedAgentUpsertSchema),
-  appliedSkills: z.array(opencodeProjectAppliedSkillResultSchema),
+  agentUpserts: z.array(z.object({
+    operation: z.enum(["create", "update"]),
+    paperclipAgentId: z.string().uuid().nullable(),
+    externalAgentKey: z.string().min(1),
+    repoRelPath: z.string().min(1),
+    fingerprint: z.string().min(1),
+  })),
   appliedAgents: z.array(opencodeProjectAppliedAgentResultSchema),
 });
 
@@ -168,11 +210,11 @@ export const opencodeProjectSyncManifestAgentSchema = z.object({
   externalAgentKey: z.string().min(1),
   repoRelPath: z.string().min(1),
   fingerprint: z.string().min(1),
-  canonicalLocator: z.string().min(1).optional(),
-  externalAgentName: z.string().min(1).optional(),
-  lastImportedAt: z.string().datetime().nullable().optional(),
-  lastExportedFingerprint: z.string().min(1).nullable().optional(),
-  lastExportedAt: z.string().datetime().nullable().optional(),
+  canonicalLocator: z.string().min(1),
+  externalAgentName: z.string().min(1),
+  lastImportedAt: z.string().datetime().nullable(),
+  lastExportedFingerprint: z.string().min(1).nullable(),
+  lastExportedAt: z.string().datetime().nullable(),
 });
 
 export const opencodeProjectSyncManifestSkillSchema = z.object({
@@ -187,8 +229,14 @@ export const opencodeProjectSyncManifestSkillSchema = z.object({
   lastExportedAt: z.string().datetime().nullable().optional(),
 });
 
-
 export type OpencodeProjectSourceOfTruth = z.infer<typeof opencodeProjectSourceOfTruthSchema>;
+export type OpencodeProjectSyncPolicy = z.infer<typeof opencodeProjectSyncPolicySchema>;
+export type OpencodeEligibleAgent = z.infer<typeof opencodeEligibleAgentSchema>;
+export type OpencodeIneligibleNestedAgent = z.infer<typeof opencodeIneligibleNestedAgentSchema>;
+export type OpencodeIgnoredArtifact = z.infer<typeof opencodeIgnoredArtifactSchema>;
+export type OpencodeTopLevelAgentPreview = z.infer<typeof opencodeTopLevelAgentPreviewSchema>;
+export type OpencodeSelectedAgent = z.infer<typeof opencodeSelectedAgentSchema>;
+export type OpencodeLegacyOutOfScopeEntity = z.infer<typeof opencodeLegacyOutOfScopeEntitySchema>;
 export type OpencodeProjectResolveWorkspaceInput = z.infer<typeof opencodeProjectResolveWorkspaceInputSchema>;
 export type OpencodeProjectSyncNowInput = z.infer<typeof opencodeProjectSyncNowInputSchema>;
 export type OpencodeProjectExportInput = z.infer<typeof opencodeProjectExportInputSchema>;
@@ -196,11 +244,10 @@ export type OpencodeProjectTestRuntimeInput = z.infer<typeof opencodeProjectTest
 export type OpencodeProjectSyncManifestAgent = z.infer<typeof opencodeProjectSyncManifestAgentSchema>;
 export type OpencodeProjectSyncManifestSkill = z.infer<typeof opencodeProjectSyncManifestSkillSchema>;
 export type OpencodeProjectConflict = z.infer<typeof opencodeProjectConflictSchema>;
+export type ImportedOpencodeFacadeAgentMetadata = z.infer<typeof importedOpencodeFacadeAgentMetadataSchema>;
 export type ImportedOpencodeAgentMetadata = z.infer<typeof importedOpencodeAgentMetadataSchema>;
 export type ImportedOpencodeSkillMetadata = z.infer<typeof importedOpencodeSkillMetadataSchema>;
-export type OpencodeProjectPlannedSkillUpsert = z.infer<typeof opencodeProjectPlannedSkillUpsertSchema>;
 export type OpencodeProjectPlannedAgentUpsert = z.infer<typeof opencodeProjectPlannedAgentUpsertSchema>;
 export type OpencodeProjectSyncPlanResult = z.infer<typeof opencodeProjectSyncPlanResultSchema>;
-export type OpencodeProjectAppliedSkillResult = z.infer<typeof opencodeProjectAppliedSkillResultSchema>;
 export type OpencodeProjectAppliedAgentResult = z.infer<typeof opencodeProjectAppliedAgentResultSchema>;
 export type OpencodeProjectFinalizeSyncInput = z.infer<typeof opencodeProjectFinalizeSyncInputSchema>;

@@ -7,36 +7,37 @@ export type DiscoveredRepoAgent = {
   displayName: string;
   role: string | null;
   repoRelPath: string;
-  folderPath: string | null;
-  reportsToExternalKey: string | null;
   instructionsMarkdown: string;
-  desiredSkillKeys: string[];
-  adapterDefaults: Record<string, unknown>;
+  advisoryMode: "primary" | "subagent" | null;
+  selectionDefault: boolean;
   fingerprint: string;
 };
 
-export type DiscoveredRepoSkill = {
-  externalSkillKey: string;
+export type DiscoveredNestedAgent = {
+  externalAgentKey: string;
   displayName: string;
   repoRelPath: string;
-  markdown: string;
-  fileInventory: Array<{ path: string; kind: "skill" | "markdown" | "reference" | "script" | "asset" | "other" }>;
-  fingerprint: string;
 };
 
-export type DiscoveryWarningCode = "ambiguous_repo_layout" | "invalid_repo_file" | "identity_collision";
+export type IgnoredArtifact = {
+  kind: "skill" | "root_agents_md" | "other";
+  repoRelPath: string;
+};
+
+export type DiscoveryWarningCode = "invalid_repo_file" | "identity_collision" | "contradictory_advisory_mode";
 
 export type DiscoveryWarning = {
   code: DiscoveryWarningCode;
   message: string;
   repoRelPath: string | null;
-  entityType: "agent" | "skill" | "workspace" | null;
+  entityType: "agent" | "workspace" | null;
   entityKey: string | null;
 };
 
 export type DiscoveredOpencodeProjectFiles = {
-  agents: DiscoveredRepoAgent[];
-  skills: DiscoveredRepoSkill[];
+  eligibleAgents: DiscoveredRepoAgent[];
+  ineligibleNestedAgents: DiscoveredNestedAgent[];
+  ignoredArtifacts: IgnoredArtifact[];
   warnings: DiscoveryWarning[];
   lastScanFingerprint: string;
   supportedFiles: string[];
@@ -50,12 +51,9 @@ type ParsedFrontmatter = {
 };
 
 const AGENT_ROOT = ".opencode/agents";
-const AGENT_COMPAT_ROOT = ".opencode/agents/agents";
 const SKILL_ROOT = ".opencode/skills";
-const LEGACY_SKILL_ROOT = ".opencode/agents/skills";
 const ROOT_AGENTS_FILE = "AGENTS.md";
 const ROOT_OPENCODE_FILE = "opencode.json";
-const SKILL_REFERENCE_PATTERN = /(?:\.opencode\/(?:agents\/)?skills\/|skill:\/\/)([A-Za-z0-9_./-]+)/g;
 
 function exists(filePath: string): boolean {
   return fs.existsSync(filePath);
@@ -103,7 +101,7 @@ function parseScalar(raw: string): unknown {
   if (trimmed === "true") return true;
   if (trimmed === "false") return false;
   if (trimmed === "null") return null;
-  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
     return trimmed.slice(1, -1);
   }
   return trimmed;
@@ -152,26 +150,7 @@ function parseFrontmatter(markdown: string): ParsedFrontmatter {
     }
 
     if (trimmedValue.startsWith("[") && trimmedValue.endsWith("]")) {
-      attributes[key] = trimmedValue
-        .slice(1, -1)
-        .split(",")
-        .map((entry) => parseScalar(entry))
-        .filter((entry) => String(entry).trim().length > 0);
-      continue;
-    }
-
-    const list: unknown[] = [];
-    let nextIndex = index + 1;
-    while (nextIndex < lines.length) {
-      const nextLine = lines[nextIndex] ?? "";
-      const listMatch = /^\s*[-*]\s+(.*)$/.exec(nextLine);
-      if (!listMatch) break;
-      list.push(parseScalar(listMatch[1] ?? ""));
-      nextIndex += 1;
-    }
-    if (list.length > 0) {
-      index = nextIndex - 1;
-      attributes[key] = list;
+      attributes[key] = trimmedValue.slice(1, -1).split(",").map((entry) => parseScalar(entry)).filter((entry) => String(entry).trim().length > 0);
       continue;
     }
 
@@ -184,26 +163,6 @@ function parseFrontmatter(markdown: string): ParsedFrontmatter {
 function extractHeading(markdownBody: string): string | null {
   const match = /^#\s+(.+)$/m.exec(markdownBody);
   return match?.[1]?.trim() || null;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry).trim()).filter(Boolean);
-  }
-  if (typeof value === "string") {
-    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
-  }
-  return [];
-}
-
-function classifyInventoryKind(repoRelPath: string): "skill" | "markdown" | "reference" | "script" | "asset" | "other" {
-  const lower = repoRelPath.toLowerCase();
-  if (lower.endsWith("/skill.md") || lower.endsWith("skill.md")) return "skill";
-  if (lower.endsWith(".md")) return "markdown";
-  if (lower.endsWith(".sh") || lower.endsWith(".py") || lower.endsWith(".ts") || lower.endsWith(".js")) return "script";
-  if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".svg")) return "asset";
-  if (lower.endsWith(".txt") || lower.endsWith(".json") || lower.endsWith(".yaml") || lower.endsWith(".yml")) return "reference";
-  return "other";
 }
 
 function walkFiles(root: string): string[] {
@@ -226,81 +185,67 @@ function walkFiles(root: string): string[] {
   return out.sort((left, right) => left.localeCompare(right));
 }
 
-function deriveSkillExternalKey(repoRelPath: string): string {
-  const normalized = normalizeSlashes(repoRelPath);
-  if (!normalized.startsWith(`${SKILL_ROOT}/`)) {
-    return slugify(normalized);
+function readJsonObject(filePath: string): Record<string, unknown> | null {
+  if (!isFile(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
   }
-  const relative = normalized.slice(SKILL_ROOT.length + 1);
-  if (relative.toLowerCase() === "readme.md") return "skills-readme";
-  if (relative.endsWith("/SKILL.md")) {
-    return slugify(relative.slice(0, -"/SKILL.md".length));
-  }
-  return slugify(relative);
 }
 
 function deriveAgentExternalKey(repoRelPath: string): string {
   const normalized = normalizeSlashes(repoRelPath);
-  if (normalized === ROOT_AGENTS_FILE) return "repo-root-agents";
-  if (normalized.startsWith(`${AGENT_COMPAT_ROOT}/`)) {
-    return slugify(normalized.slice(AGENT_COMPAT_ROOT.length + 1));
-  }
   if (normalized.startsWith(`${AGENT_ROOT}/`)) {
     return slugify(normalized.slice(AGENT_ROOT.length + 1));
   }
   return slugify(normalized);
 }
 
-function deriveAgentFolderPath(repoRelPath: string): string | null {
+function getAgentDepth(repoRelPath: string): number {
   const normalized = normalizeSlashes(repoRelPath);
-  if (normalized === ROOT_AGENTS_FILE) return null;
-  const externalKey = deriveAgentExternalKey(repoRelPath);
-  const parts = externalKey.split("-");
-  return parts.length > 1 ? parts.slice(0, -1).join("/") : null;
+  if (!normalized.startsWith(`${AGENT_ROOT}/`)) return Number.POSITIVE_INFINITY;
+  const relative = normalized.slice(AGENT_ROOT.length + 1);
+  return relative.split("/").length;
 }
 
-function extractDesiredSkillKeys(frontmatter: Record<string, unknown>, body: string): string[] {
-  const values = [
-    ...toStringArray(frontmatter.skills),
-    ...toStringArray(frontmatter.skill),
-    ...toStringArray(frontmatter.desiredSkills),
-    ...toStringArray(frontmatter.desired_skills),
-  ];
-
-  for (const match of body.matchAll(SKILL_REFERENCE_PATTERN)) {
-    const raw = (match[1] ?? "").replace(/\/SKILL\.md$/i, "").replace(/\/$/, "");
-    if (raw) values.push(raw);
-  }
-
-  return [...new Set(values.map((entry) => slugify(entry)).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+function getAdvisoryMode(attributes: Record<string, unknown>): "primary" | "subagent" | null {
+  const raw = attributes.mode;
+  if (raw === "primary" || raw === "subagent") return raw;
+  return null;
 }
 
-function readJsonObject(filePath: string): Record<string, unknown> | null {
-  if (!isFile(filePath)) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
+function createContradictoryModeWarning(repoRelPath: string, externalAgentKey: string, advisoryMode: "primary" | "subagent"): DiscoveryWarning | null {
+  const depth = getAgentDepth(repoRelPath);
+  if (depth === 1 && advisoryMode === "subagent") {
+    return {
+      code: "contradictory_advisory_mode",
+      message: `Top-level agent '${repoRelPath}' declares advisory mode 'subagent'; folder depth remains the source of truth and the file stays eligible.`,
+      repoRelPath,
+      entityType: "agent",
+      entityKey: externalAgentKey,
+    };
   }
-}
-
-function getAdapterDefaults(opencodeConfig: Record<string, unknown> | null): Record<string, unknown> {
-  const defaults = opencodeConfig?.paperclip;
-  if (defaults && typeof defaults === "object" && !Array.isArray(defaults)) {
-    return { ...(defaults as Record<string, unknown>) };
+  if (depth > 1 && advisoryMode === "primary") {
+    return {
+      code: "contradictory_advisory_mode",
+      message: `Nested agent '${repoRelPath}' declares advisory mode 'primary'; folder depth remains the source of truth and the file stays ineligible.`,
+      repoRelPath,
+      entityType: "agent",
+      entityKey: externalAgentKey,
+    };
   }
-  return {};
+  return null;
 }
 
 export function discoverOpencodeProjectFiles(input: { repoRoot: string }): DiscoveredOpencodeProjectFiles {
   const repoRoot = path.resolve(input.repoRoot);
   const warnings: DiscoveryWarning[] = [];
   const supportedFiles = new Set<string>();
-  const agents = new Map<string, DiscoveredRepoAgent>();
-  const skills = new Map<string, DiscoveredRepoSkill>();
+  const ignoredArtifacts = new Map<string, IgnoredArtifact>();
+  const eligibleAgentsByKey = new Map<string, DiscoveredRepoAgent>();
+  const nestedAgents: DiscoveredNestedAgent[] = [];
   const opencodeConfigPath = path.join(repoRoot, ROOT_OPENCODE_FILE);
   const opencodeConfig = readJsonObject(opencodeConfigPath);
 
@@ -322,149 +267,75 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
   if (isFile(rootAgentsPath)) {
     rootAgentsMarkdown = fs.readFileSync(rootAgentsPath, "utf8");
     supportedFiles.add(ROOT_AGENTS_FILE);
-    const parsed = parseFrontmatter(rootAgentsMarkdown);
-    const displayName = String(parsed.attributes.name ?? extractHeading(parsed.body) ?? "Repository Instructions").trim();
-    const fingerprint = sha256(ROOT_AGENTS_FILE, rootAgentsMarkdown);
-    const externalSkillKey = "repo-root-agents";
-    skills.set(externalSkillKey, {
-      externalSkillKey,
-      displayName,
+    ignoredArtifacts.set(ROOT_AGENTS_FILE, {
+      kind: "root_agents_md",
       repoRelPath: ROOT_AGENTS_FILE,
-      markdown: rootAgentsMarkdown,
-      fileInventory: [{ path: ROOT_AGENTS_FILE, kind: "markdown" }],
-      fingerprint,
-    });
-  }
-
-  const legacySkillRootPath = path.join(repoRoot, LEGACY_SKILL_ROOT);
-  const legacySkillFiles = walkFiles(legacySkillRootPath);
-  if (legacySkillFiles.length > 0) {
-    warnings.push({
-      code: "ambiguous_repo_layout",
-      message: `Legacy skill files were found under '${LEGACY_SKILL_ROOT}'. Cycle 2.2 only supports '${SKILL_ROOT}/**'; migrate these files before importing.`,
-      repoRelPath: LEGACY_SKILL_ROOT,
-      entityType: "workspace",
-      entityKey: null,
     });
   }
 
   const skillRootPath = path.join(repoRoot, SKILL_ROOT);
-  if (isDirectory(skillRootPath)) {
-    for (const filePath of walkFiles(skillRootPath)) {
-      const repoRelPath = normalizeSlashes(path.relative(repoRoot, filePath));
-      supportedFiles.add(repoRelPath);
-      if (!repoRelPath.toLowerCase().endsWith(".md")) continue;
-      const lower = repoRelPath.toLowerCase();
-      if (lower.endsWith("/readme.md") && !lower.endsWith("/skill.md")) continue;
-      if (!lower.endsWith("/skill.md") && path.basename(repoRelPath).toLowerCase() === "readme.md") continue;
-
-      const markdown = fs.readFileSync(filePath, "utf8");
-      const parsed = parseFrontmatter(markdown);
-      const externalSkillKey = deriveSkillExternalKey(repoRelPath);
-      const displayName = String(parsed.attributes.name ?? extractHeading(parsed.body) ?? titleCase(externalSkillKey)).trim();
-      const inventory = walkFiles(path.dirname(filePath))
-        .map((entryPath) => {
-          const entryRelPath = normalizeSlashes(path.relative(repoRoot, entryPath));
-          supportedFiles.add(entryRelPath);
-          return {
-            path: entryRelPath,
-            kind: classifyInventoryKind(entryRelPath),
-          };
-        });
-      const fingerprint = sha256(repoRelPath, markdown, JSON.stringify(inventory));
-      const existing = skills.get(externalSkillKey);
-      if (existing && existing.repoRelPath !== repoRelPath) {
-        warnings.push({
-          code: "identity_collision",
-          message: `Skill identity '${externalSkillKey}' is defined by multiple files (${existing.repoRelPath}, ${repoRelPath}).`,
-          repoRelPath,
-          entityType: "skill",
-          entityKey: externalSkillKey,
-        });
-        continue;
-      }
-      skills.set(externalSkillKey, {
-        externalSkillKey,
-        displayName,
-        repoRelPath,
-        markdown,
-        fileInventory: inventory,
-        fingerprint,
-      });
-    }
-  }
-
-  const standardAgentFiles = walkFiles(path.join(repoRoot, AGENT_ROOT))
-    .filter((filePath) => {
-      const repoRelPath = normalizeSlashes(path.relative(repoRoot, filePath));
-      return !repoRelPath.startsWith(`${AGENT_COMPAT_ROOT}/`) && !repoRelPath.startsWith(`${LEGACY_SKILL_ROOT}/`);
-    });
-  const compatAgentFiles = walkFiles(path.join(repoRoot, AGENT_COMPAT_ROOT));
-  const hasStandardAgentLayout = standardAgentFiles.some((filePath) => filePath.toLowerCase().endsWith(".md"));
-  const hasCompatAgentLayout = compatAgentFiles.some((filePath) => filePath.toLowerCase().endsWith(".md"));
-
-  if (hasStandardAgentLayout && hasCompatAgentLayout) {
-    warnings.push({
-      code: "ambiguous_repo_layout",
-      message: `Agent files were found in both '${AGENT_ROOT}/**' and compatibility alias '${AGENT_COMPAT_ROOT}/**'. Cycle 2.2 blocks mixed agent layouts instead of merging them.`,
-      repoRelPath: AGENT_ROOT,
-      entityType: "workspace",
-      entityKey: null,
-    });
-  }
-
-  const agentFiles = hasStandardAgentLayout && hasCompatAgentLayout
-    ? []
-    : hasCompatAgentLayout
-      ? compatAgentFiles
-      : standardAgentFiles;
-
-  for (const filePath of [...new Set(agentFiles.map((entry) => path.resolve(entry)))].sort((left, right) => left.localeCompare(right))) {
+  for (const filePath of walkFiles(skillRootPath)) {
     const repoRelPath = normalizeSlashes(path.relative(repoRoot, filePath));
-    if (!repoRelPath.toLowerCase().endsWith(".md")) continue;
-    if (repoRelPath.startsWith(".opencode/agents/skills/")) continue;
-    if (repoRelPath.startsWith(".opencode/skills/")) continue;
     supportedFiles.add(repoRelPath);
+    ignoredArtifacts.set(repoRelPath, {
+      kind: "skill",
+      repoRelPath,
+    });
+  }
+
+  const allAgentFiles = walkFiles(path.join(repoRoot, AGENT_ROOT));
+  for (const filePath of allAgentFiles) {
+    const repoRelPath = normalizeSlashes(path.relative(repoRoot, filePath));
+    supportedFiles.add(repoRelPath);
+    if (!repoRelPath.toLowerCase().endsWith(".md")) {
+      ignoredArtifacts.set(repoRelPath, {
+        kind: "other",
+        repoRelPath,
+      });
+      continue;
+    }
 
     const instructionsMarkdown = fs.readFileSync(filePath, "utf8");
     const parsed = parseFrontmatter(instructionsMarkdown);
     const externalAgentKey = deriveAgentExternalKey(repoRelPath);
     const displayName = String(parsed.attributes.name ?? extractHeading(parsed.body) ?? titleCase(path.basename(externalAgentKey))).trim();
     const role = typeof parsed.attributes.role === "string" ? parsed.attributes.role.trim() : null;
-    const reportsToExternalKey = typeof parsed.attributes.reportsTo === "string"
-      ? slugify(parsed.attributes.reportsTo)
-      : typeof parsed.attributes.reports_to === "string"
-        ? slugify(parsed.attributes.reports_to)
-        : typeof parsed.attributes.manager === "string"
-          ? slugify(parsed.attributes.manager)
-          : null;
-    const desiredSkillKeys = extractDesiredSkillKeys(parsed.attributes, instructionsMarkdown);
-    const adapterDefaults = getAdapterDefaults(opencodeConfig);
-    const fingerprint = sha256(repoRelPath, instructionsMarkdown, JSON.stringify(adapterDefaults), desiredSkillKeys.join(","));
+    const advisoryMode = getAdvisoryMode(parsed.attributes);
+    const contradictoryModeWarning = advisoryMode ? createContradictoryModeWarning(repoRelPath, externalAgentKey, advisoryMode) : null;
+    if (contradictoryModeWarning) warnings.push(contradictoryModeWarning);
 
-    const existing = agents.get(externalAgentKey);
-    if (existing && existing.repoRelPath !== repoRelPath) {
-      warnings.push({
-        code: "identity_collision",
-        message: `Agent identity '${externalAgentKey}' is defined by multiple files (${existing.repoRelPath}, ${repoRelPath}).`,
+    const depth = getAgentDepth(repoRelPath);
+    if (depth === 1) {
+      const fingerprint = sha256(repoRelPath, instructionsMarkdown);
+      const existing = eligibleAgentsByKey.get(externalAgentKey);
+      if (existing && existing.repoRelPath !== repoRelPath) {
+        warnings.push({
+          code: "identity_collision",
+          message: `Agent identity '${externalAgentKey}' is defined by multiple eligible top-level files (${existing.repoRelPath}, ${repoRelPath}).`,
+          repoRelPath,
+          entityType: "agent",
+          entityKey: externalAgentKey,
+        });
+        continue;
+      }
+
+      eligibleAgentsByKey.set(externalAgentKey, {
+        externalAgentKey,
+        displayName,
+        role,
         repoRelPath,
-        entityType: "agent",
-        entityKey: externalAgentKey,
+        instructionsMarkdown,
+        advisoryMode,
+        selectionDefault: false,
+        fingerprint,
       });
       continue;
     }
 
-    agents.set(externalAgentKey, {
+    nestedAgents.push({
       externalAgentKey,
       displayName,
-      role,
       repoRelPath,
-      folderPath: deriveAgentFolderPath(repoRelPath),
-      reportsToExternalKey,
-      instructionsMarkdown,
-      desiredSkillKeys,
-      adapterDefaults,
-      fingerprint,
     });
   }
 
@@ -472,8 +343,9 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
   const lastScanFingerprint = sha256(...orderedFiles.map((file) => `${file}:${isFile(path.join(repoRoot, file)) ? fs.readFileSync(path.join(repoRoot, file), "utf8") : "missing"}`));
 
   return {
-    agents: [...agents.values()].sort((left, right) => left.externalAgentKey.localeCompare(right.externalAgentKey)),
-    skills: [...skills.values()].sort((left, right) => left.externalSkillKey.localeCompare(right.externalSkillKey)),
+    eligibleAgents: [...eligibleAgentsByKey.values()].sort((left, right) => left.externalAgentKey.localeCompare(right.externalAgentKey)),
+    ineligibleNestedAgents: nestedAgents.sort((left, right) => left.repoRelPath.localeCompare(right.repoRelPath)),
+    ignoredArtifacts: [...ignoredArtifacts.values()].sort((left, right) => left.repoRelPath.localeCompare(right.repoRelPath)),
     warnings,
     lastScanFingerprint,
     supportedFiles: orderedFiles,

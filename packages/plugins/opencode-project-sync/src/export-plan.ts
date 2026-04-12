@@ -4,7 +4,6 @@ import type {
   ImportedOpencodeAgentMetadata,
   OpencodeProjectConflict,
   OpencodeProjectSyncManifestAgent,
-  OpencodeProjectSyncManifestSkill,
 } from "./schemas.js";
 import { importedOpencodeAgentMetadataSchema } from "./schemas.js";
 
@@ -17,15 +16,8 @@ export type ExportablePaperclipAgent = {
   metadata: Record<string, unknown> | null;
 };
 
-export type ExportablePaperclipSkill = {
-  id: string;
-  name: string;
-  slug: string;
-  markdown: string;
-};
-
 export type ExportFilePlan = {
-  entityType: "agent" | "skill";
+  entityType: "agent";
   entityId: string;
   repoRelPath: string;
   content: string;
@@ -44,9 +36,7 @@ type BuildExportPlanInput = {
   currentRepoFingerprint: string;
   forceIfRepoUnchangedCheckFails: boolean;
   exportAgents: boolean;
-  exportSkills: boolean;
   agents: ExportablePaperclipAgent[];
-  skills: ExportablePaperclipSkill[];
 };
 
 function parseImportedAgentMetadata(metadata: Record<string, unknown> | null | undefined): ImportedOpencodeAgentMetadata | null {
@@ -58,24 +48,15 @@ function toAgentMarkdown(agent: ExportablePaperclipAgent, metadata: ImportedOpen
   const promptTemplate = typeof agent.adapterConfig.promptTemplate === "string"
     ? agent.adapterConfig.promptTemplate
     : `# ${agent.name}\n`;
-  const desiredSkillBlock = metadata.desiredSkillKeys.length > 0
-    ? `desiredSkills:\n${metadata.desiredSkillKeys.map((skillKey: string) => `  - ${skillKey}`).join("\n")}`
-    : "desiredSkills: []";
   return [
     "---",
     `name: ${JSON.stringify(agent.name)}`,
     agent.title ? `role: ${JSON.stringify(agent.title)}` : undefined,
-    metadata.reportsToExternalKey ? `reportsTo: ${JSON.stringify(metadata.reportsToExternalKey)}` : undefined,
-    desiredSkillBlock,
     "---",
     "",
     promptTemplate.trimEnd(),
     "",
   ].filter((line) => line !== undefined).join("\n");
-}
-
-function toSkillMarkdown(skill: ExportablePaperclipSkill): string {
-  return skill.markdown.endsWith("\n") ? skill.markdown : `${skill.markdown}\n`;
 }
 
 function normalizeRepoRelPath(repoRelPath: string): string | null {
@@ -133,7 +114,7 @@ export function buildExportPlan(input: BuildExportPlanInput): ExportPlan {
     && !input.forceIfRepoUnchangedCheckFails
   ) {
     conflicts.push({
-      code: "repo_changed_since_last_import",
+      code: "paperclip_entity_drift",
       message: "The canonical repo changed since the last import. Re-import before exporting, or explicitly override the guard.",
       repoRelPath: null,
       entityType: "workspace",
@@ -150,9 +131,6 @@ export function buildExportPlan(input: BuildExportPlanInput): ExportPlan {
   const files: ExportFilePlan[] = [];
   const managedAgentIds = new Set(
     input.state.importedAgents.map((entry: OpencodeProjectSyncManifestAgent) => entry.paperclipAgentId),
-  );
-  const managedSkillIds = new Set(
-    input.state.importedSkills.map((entry: OpencodeProjectSyncManifestSkill) => entry.paperclipSkillId),
   );
 
   if (input.exportAgents) {
@@ -172,7 +150,7 @@ export function buildExportPlan(input: BuildExportPlanInput): ExportPlan {
       const validatedPath = validateExportRepoRelPath("agent", metadata.repoRelPath);
       if (!validatedPath.ok) {
         conflicts.push({
-          code: "export_target_changed",
+          code: "paperclip_entity_drift",
           message: validatedPath.message,
           repoRelPath: metadata.repoRelPath,
           entityType: "agent",
@@ -190,36 +168,8 @@ export function buildExportPlan(input: BuildExportPlanInput): ExportPlan {
     }
   }
 
-  if (input.exportSkills) {
-    for (const skill of input.skills) {
-      if (!managedSkillIds.has(skill.id)) continue;
-      const manifestEntry = input.state.importedSkills.find(
-        (entry: OpencodeProjectSyncManifestSkill) => entry.paperclipSkillId === skill.id,
-      ) ?? null;
-      if (!manifestEntry) continue;
-      const validatedPath = validateExportRepoRelPath("skill", manifestEntry.repoRelPath);
-      if (!validatedPath.ok) {
-        conflicts.push({
-          code: "export_target_changed",
-          message: validatedPath.message,
-          repoRelPath: manifestEntry.repoRelPath,
-          entityType: "skill",
-          entityKey: skill.id,
-        });
-        continue;
-      }
-      files.push({
-        entityType: "skill",
-        entityId: skill.id,
-        repoRelPath: validatedPath.repoRelPath,
-        content: toSkillMarkdown(skill),
-        fingerprint: manifestEntry.fingerprint,
-      });
-    }
-  }
-
   if (files.length === 0) {
-    warnings.push("No sync-managed imported entities matched the requested export selection.");
+    warnings.push("No sync-managed imported agents matched the requested export selection.");
   }
 
   return {

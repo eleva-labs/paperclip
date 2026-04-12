@@ -48,21 +48,19 @@ export {
   discoverOpencodeProjectFiles,
   type DiscoveredOpencodeProjectFiles,
   type DiscoveredRepoAgent,
-  type DiscoveredRepoSkill,
+  type DiscoveredNestedAgent,
+  type IgnoredArtifact,
   type DiscoveryWarning,
 } from "./discovery.js";
 export {
   buildImportPlan,
   type ImportPlan,
   type MinimalPaperclipAgent,
-  type MinimalPaperclipSkill,
   type PlannedAgentUpsert,
-  type PlannedSkillUpsert,
 } from "./import-plan.js";
 export {
   buildExportPlan,
   type ExportablePaperclipAgent,
-  type ExportablePaperclipSkill,
   type ExportFilePlan,
   type ExportPlan,
 } from "./export-plan.js";

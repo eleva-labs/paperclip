@@ -6,6 +6,13 @@ import {
   OPENCODE_PROJECT_HOST_MUTATION_TRANSPORT,
 } from "./host-contract-constants.js";
 
+export {
+  OPENCODE_PROJECT_HOST_API_BASE_PATH,
+  OPENCODE_PROJECT_HOST_MUTATION_ENDPOINTS,
+  OPENCODE_PROJECT_HOST_MUTATION_SURFACE,
+  OPENCODE_PROJECT_HOST_MUTATION_TRANSPORT,
+};
+
 /**
  * Cycle 1.1 freezes a realistic mutation boundary without inventing new host SDK
  * methods: the companion plugin plans sync/import/export in-package, then applies

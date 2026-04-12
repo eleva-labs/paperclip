@@ -5,7 +5,7 @@ import type {
   OpencodeProjectSourceOfTruth,
 } from "./schemas.js";
 import { importedOpencodeAgentMetadataSchema } from "./schemas.js";
-import type { DiscoveredRepoAgent, DiscoveredRepoSkill, DiscoveryWarning } from "./discovery.js";
+import type { DiscoveredRepoAgent, DiscoveryWarning } from "./discovery.js";
 
 export type MinimalPaperclipAgent = {
   id: string;
@@ -17,38 +17,16 @@ export type MinimalPaperclipAgent = {
   metadata: Record<string, unknown> | null;
 };
 
-export type MinimalPaperclipSkill = {
-  id: string;
-  key: string;
-  slug: string;
-  name: string;
-};
-
-export type PlannedSkillUpsert = {
-  operation: "create" | "update";
-  paperclipSkillId: string | null;
-  externalSkillKey: string;
-  repoRelPath: string;
-  fingerprint: string;
-  payload: {
-    name: string;
-    slug: string;
-    markdown: string;
-    filePath: string;
-  };
-};
-
 export type PlannedAgentUpsert = {
   operation: "create" | "update";
   paperclipAgentId: string | null;
   externalAgentKey: string;
   repoRelPath: string;
   fingerprint: string;
-  desiredSkillKeys: string[];
   payload: {
     name: string;
     title: string | null;
-    reportsToExternalKey: string | null;
+    reportsTo: null;
     adapterType: string;
     adapterConfig: Record<string, unknown>;
     metadata: ImportedOpencodeAgentMetadata;
@@ -57,7 +35,7 @@ export type PlannedAgentUpsert = {
 
 export type ImportPlan = {
   sourceOfTruth: OpencodeProjectSourceOfTruth;
-  skillUpserts: PlannedSkillUpsert[];
+  skillUpserts: [];
   agentUpserts: PlannedAgentUpsert[];
   warnings: string[];
   conflicts: OpencodeProjectConflict[];
@@ -68,11 +46,6 @@ type PriorImportedAgent = {
   externalAgentKey: string;
 };
 
-type PriorImportedSkill = {
-  paperclipSkillId: string;
-  externalSkillKey: string;
-};
-
 type BuildImportPlanInput = {
   companyId: string;
   projectId: string;
@@ -80,22 +53,17 @@ type BuildImportPlanInput = {
   repoRoot: string;
   sourceOfTruth: OpencodeProjectSourceOfTruth;
   discovery: {
-    agents: DiscoveredRepoAgent[];
-    skills: DiscoveredRepoSkill[];
+    eligibleAgents: DiscoveredRepoAgent[];
     warnings: DiscoveryWarning[];
   };
+  selectedAgentKeys: string[];
   existingState: OpencodeProjectSyncState | null;
   existingAgents: MinimalPaperclipAgent[];
-  existingSkills: MinimalPaperclipSkill[];
   importedAt: string;
 };
 
 function toLocator(repoRoot: string, repoRelPath: string): string {
   return `${repoRoot}::${repoRelPath}`;
-}
-
-function toSlug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "item";
 }
 
 function toTitle(value: string): string {
@@ -116,8 +84,8 @@ function createConflictsFromDiscoveryWarnings(warnings: DiscoveryWarning[]): Ope
     .filter(
       (
         warning,
-      ): warning is DiscoveryWarning & { code: "identity_collision" | "ambiguous_repo_layout" } => (
-        warning.code === "identity_collision" || warning.code === "ambiguous_repo_layout"
+      ): warning is DiscoveryWarning & { code: "identity_collision" } => (
+        warning.code === "identity_collision"
       ),
     )
     .map((warning) => ({
@@ -132,7 +100,7 @@ function createConflictsFromDiscoveryWarnings(warnings: DiscoveryWarning[]): Ope
 export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
   const conflicts = createConflictsFromDiscoveryWarnings(input.discovery.warnings);
   const warnings = input.discovery.warnings
-    .filter((warning) => warning.code === "invalid_repo_file")
+    .filter((warning) => warning.code !== "identity_collision")
     .map((warning) => warning.message);
 
   const priorAgentManifest = new Map<string, PriorImportedAgent>(
@@ -141,13 +109,6 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
       return [typedEntry.externalAgentKey, typedEntry] as const;
     }),
   );
-  const priorSkillManifest = new Map<string, PriorImportedSkill>(
-    (input.existingState?.importedSkills ?? []).map((entry: OpencodeProjectSyncState["importedSkills"][number]) => {
-      const typedEntry = entry as PriorImportedSkill;
-      return [typedEntry.externalSkillKey, typedEntry] as const;
-    }),
-  );
-
   const existingAgentsById = new Map(input.existingAgents.map((agent) => [agent.id, agent]));
   const existingManagedAgents = new Map<string, MinimalPaperclipAgent>();
   for (const agent of input.existingAgents) {
@@ -157,52 +118,35 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
     existingManagedAgents.set(metadata.externalAgentKey, agent);
   }
 
-  const existingSkillsById = new Map(input.existingSkills.map((skill) => [skill.id, skill]));
-  const existingSkillsBySlug = new Map(input.existingSkills.map((skill) => [skill.slug, skill]));
-
-  const skillUpserts: PlannedSkillUpsert[] = [];
-  for (const discoveredSkill of input.discovery.skills) {
-    const priorManifest = priorSkillManifest.get(discoveredSkill.externalSkillKey) ?? null;
-    const slug = toSlug(discoveredSkill.externalSkillKey);
-    const manifestMatch = priorManifest?.paperclipSkillId ? existingSkillsById.get(priorManifest.paperclipSkillId) ?? null : null;
-    const slugMatch = existingSkillsBySlug.get(slug) ?? null;
-    const existing = manifestMatch ?? slugMatch;
-
-    skillUpserts.push({
-      operation: existing ? "update" : "create",
-      paperclipSkillId: existing?.id ?? null,
-      externalSkillKey: discoveredSkill.externalSkillKey,
-      repoRelPath: discoveredSkill.repoRelPath,
-      fingerprint: discoveredSkill.fingerprint,
-      payload: {
-        name: discoveredSkill.displayName || toTitle(discoveredSkill.externalSkillKey),
-        slug,
-        markdown: discoveredSkill.markdown,
-        filePath: discoveredSkill.repoRelPath,
-      },
+  const eligibleAgentsByKey = new Map(
+    input.discovery.eligibleAgents.map((agent) => [agent.externalAgentKey, agent] as const),
+  );
+  for (const externalAgentKey of input.selectedAgentKeys) {
+    if (eligibleAgentsByKey.has(externalAgentKey)) continue;
+    conflicts.push({
+      code: "invalid_selection",
+      message: `Selected agent '${externalAgentKey}' is not currently eligible for top-level import. Refresh discovery and choose from the current top-level set.`,
+      repoRelPath: null,
+      entityType: "agent",
+      entityKey: externalAgentKey,
     });
   }
 
-  const knownSkillKeys = new Set(skillUpserts.map((entry) => entry.externalSkillKey));
   const agentUpserts: PlannedAgentUpsert[] = [];
-  for (const discoveredAgent of input.discovery.agents) {
+  for (const externalAgentKey of input.selectedAgentKeys) {
+    const discoveredAgent = eligibleAgentsByKey.get(externalAgentKey);
+    if (!discoveredAgent) continue;
     const locator = toLocator(input.repoRoot, discoveredAgent.repoRelPath);
     const priorManifest = priorAgentManifest.get(discoveredAgent.externalAgentKey) ?? null;
     const manifestMatch = priorManifest?.paperclipAgentId ? existingAgentsById.get(priorManifest.paperclipAgentId) ?? null : null;
     const managedMatch = existingManagedAgents.get(discoveredAgent.externalAgentKey) ?? null;
     const existing = manifestMatch ?? managedMatch ?? null;
 
-    const unresolvedSkillKeys = discoveredAgent.desiredSkillKeys.filter((skillKey) => !knownSkillKeys.has(skillKey));
-    if (unresolvedSkillKeys.length > 0) {
-      warnings.push(
-        `Agent '${discoveredAgent.displayName}' references unknown repo skill keys: ${unresolvedSkillKeys.join(", ")}.`,
-      );
-    }
-
     const existingMetadata = existing ? parseImportedAgentMetadata(existing.metadata) : null;
     const metadata: ImportedOpencodeAgentMetadata = {
       syncManaged: true,
       sourceSystem: "opencode_project_repo",
+      syncPolicyMode: "top_level_agents_only",
       sourceOfTruth: input.sourceOfTruth,
       projectId: input.projectId,
       workspaceId: input.workspaceId,
@@ -211,10 +155,8 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
       canonicalLocator: locator,
       externalAgentKey: discoveredAgent.externalAgentKey,
       externalAgentName: discoveredAgent.displayName,
-      folderPath: discoveredAgent.folderPath,
-      hierarchyMode: discoveredAgent.reportsToExternalKey ? "reports_to" : "metadata_only",
-      reportsToExternalKey: discoveredAgent.reportsToExternalKey,
-      desiredSkillKeys: discoveredAgent.desiredSkillKeys,
+      importRole: "facade_entrypoint",
+      topLevelAgent: true,
       lastImportedFingerprint: discoveredAgent.fingerprint,
       lastImportedAt: input.importedAt,
       lastExportedFingerprint: existingMetadata?.lastExportedFingerprint ?? null,
@@ -227,15 +169,13 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
       externalAgentKey: discoveredAgent.externalAgentKey,
       repoRelPath: discoveredAgent.repoRelPath,
       fingerprint: discoveredAgent.fingerprint,
-      desiredSkillKeys: discoveredAgent.desiredSkillKeys.filter((skillKey) => knownSkillKeys.has(skillKey)),
       payload: {
         name: discoveredAgent.displayName || toTitle(discoveredAgent.externalAgentKey),
         title: discoveredAgent.role ?? null,
-        reportsToExternalKey: discoveredAgent.reportsToExternalKey,
+        reportsTo: null,
         adapterType: existing?.adapterType ?? "opencode_project_local",
         adapterConfig: {
           ...(existing?.adapterConfig ?? {}),
-          ...discoveredAgent.adapterDefaults,
           allowProjectConfig: true,
           syncPluginKey: "paperclip-opencode-project",
           promptTemplate: discoveredAgent.instructionsMarkdown,
@@ -245,17 +185,9 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
     });
   }
 
-  const discoveredAgentKeys = new Set(agentUpserts.map((entry) => entry.externalAgentKey));
-  for (const entry of agentUpserts) {
-    const managerKey = entry.payload.reportsToExternalKey;
-    if (managerKey && !discoveredAgentKeys.has(managerKey) && !existingManagedAgents.has(managerKey)) {
-      warnings.push(`Agent '${entry.payload.name}' reports to unknown agent key '${managerKey}'.`);
-    }
-  }
-
   return {
     sourceOfTruth: input.sourceOfTruth,
-    skillUpserts,
+    skillUpserts: [],
     agentUpserts,
     warnings: [...new Set(warnings)].sort((left, right) => left.localeCompare(right)),
     conflicts,
