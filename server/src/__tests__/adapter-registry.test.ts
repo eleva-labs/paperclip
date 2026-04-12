@@ -171,4 +171,56 @@ describe("server adapter registry", () => {
 
     unregisterServerAdapter("opencode_project_local");
   });
+
+  it("allows opencode_full, opencode_project_local, and built-in opencode_local to coexist", () => {
+    unregisterServerAdapter("opencode_full");
+    unregisterServerAdapter("opencode_project_local");
+
+    const builtInOpenCode = findServerAdapter("opencode_local");
+    expect(builtInOpenCode).not.toBeNull();
+
+    const fullAdapter: ServerAdapterModule = {
+      type: "opencode_full",
+      execute: async () => ({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+      }),
+      testEnvironment: async () => ({
+        adapterType: "opencode_full",
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      models: [{ id: "openai/gpt-5.4", label: "GPT-5.4" }],
+      supportsLocalAgentJwt: false,
+    };
+
+    const projectAdapter: ServerAdapterModule = {
+      type: "opencode_project_local",
+      execute: async () => ({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+      }),
+      testEnvironment: async () => ({
+        adapterType: "opencode_project_local",
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      models: [{ id: "openai/gpt-5.4", label: "GPT-5.4" }],
+      supportsLocalAgentJwt: false,
+    };
+
+    registerServerAdapter(fullAdapter);
+    registerServerAdapter(projectAdapter);
+
+    expect(requireServerAdapter("opencode_full")).toBe(fullAdapter);
+    expect(requireServerAdapter("opencode_project_local")).toBe(projectAdapter);
+    expect(requireServerAdapter("opencode_local")).toBe(builtInOpenCode);
+
+    unregisterServerAdapter("opencode_full");
+    unregisterServerAdapter("opencode_project_local");
+  });
 });
