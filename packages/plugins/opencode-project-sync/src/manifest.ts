@@ -3,7 +3,6 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 export const OPENCODE_PROJECT_SYNC_PLUGIN_ID = "paperclip-opencode-project";
 export const OPENCODE_PROJECT_SYNC_TOOLBAR_BUTTON_ID = "opencode-project-toolbar";
 export const OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID = "opencode-project-tab";
-export const OPENCODE_PROJECT_SYNC_SIDEBAR_ITEM_ID = "opencode-project-sidebar";
 export const OPENCODE_PROJECT_SYNC_STATE_DATA_KEY = "project-sync-state";
 export const OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY = "project-sync-preview";
 export const OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY = "host-mutation-contract";
@@ -66,25 +65,10 @@ const manifest: PaperclipPluginManifestV1 = {
   ui: {
     slots: [
       {
-        type: "toolbarButton",
-        id: OPENCODE_PROJECT_SYNC_TOOLBAR_BUTTON_ID,
-        displayName: "OpenCode",
-        exportName: "ProjectToolbarButton",
-        order: 40,
-      },
-      {
         type: "detailTab",
         id: OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID,
         displayName: "OpenCode",
         exportName: "ProjectDetailTab",
-        entityTypes: ["project"],
-        order: 40,
-      },
-      {
-        type: "projectSidebarItem",
-        id: OPENCODE_PROJECT_SYNC_SIDEBAR_ITEM_ID,
-        displayName: "OpenCode",
-        exportName: "ProjectSidebarItem",
         entityTypes: ["project"],
         order: 40,
       },

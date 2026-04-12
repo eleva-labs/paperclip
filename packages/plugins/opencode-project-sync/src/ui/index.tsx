@@ -5,7 +5,6 @@ import {
   usePluginData,
   usePluginToast,
   type PluginDetailTabProps,
-  type PluginProjectSidebarItemProps,
   type PluginBridgeError,
 } from "@paperclipai/plugin-sdk/ui";
 import {
@@ -305,11 +304,6 @@ async function applySyncPlan(companyId: string, plan: SyncPlanResult) {
   return {
     appliedAgents: Array.from(agentIdByExternalKey, ([externalAgentKey, paperclipAgentId]) => ({ externalAgentKey, paperclipAgentId })),
   };
-}
-
-function buildProjectTabHref(companyPrefix: string | null, projectId: string): string {
-  const prefix = companyPrefix ? `/${companyPrefix}` : "";
-  return `${prefix}/projects/${projectId}?tab=plugin:${OPENCODE_PROJECT_SYNC_PLUGIN_ID}:${OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID}`;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -912,19 +906,4 @@ export function ProjectToolbarButton(): ReactElement {
 
 export function ProjectDetailTab(_props: PluginDetailTabProps): ReactElement {
   return <ProjectOpenCodePanel />;
-}
-
-export function ProjectSidebarItem({ context }: PluginProjectSidebarItemProps): ReactElement {
-  const href = buildProjectTabHref(context.companyPrefix ?? null, context.entityId);
-  return (
-    <a href={href} style={{ ...cardStyle, display: "grid", gap: 8, textDecoration: "none", color: "inherit" }}>
-      <div style={rowStyle}>
-        <strong>OpenCode</strong>
-        <SummaryPill label="Project tab" status="info" />
-      </div>
-      <div style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.76 }}>
-        Open the canonical workspace binding, repo-first sync status, guarded export, and runtime test panel.
-      </div>
-    </a>
-  );
 }
