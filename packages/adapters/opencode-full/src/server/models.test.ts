@@ -24,6 +24,7 @@ import {
   ensureLocalCliOpenCodeModelConfiguredAndAvailable,
   ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
   prepareLocalCliRuntimeConfig,
+  remoteServerExecutionScope,
   resetLocalCliOpenCodeModelsCacheForTests,
 } from "./models.js";
 
@@ -251,5 +252,16 @@ describe("opencode_full local_cli models/runtime config", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(discoverRemoteServerOpenCodeModels(remoteServerConfig)).rejects.toThrow(/rejected authentication/i);
+  });
+
+  it("reports remote execution scope truthfully for Cycle 4.1", () => {
+    expect(remoteServerExecutionScope(remoteServerConfig)).toBe("server_default_only");
+    expect(remoteServerExecutionScope({
+      ...remoteServerConfig,
+      remoteServer: {
+        ...remoteServerConfig.remoteServer,
+        projectTarget: { mode: "paperclip_workspace", requireDedicatedServer: false },
+      },
+    } as never)).toBe("deferred_target_mode");
   });
 });

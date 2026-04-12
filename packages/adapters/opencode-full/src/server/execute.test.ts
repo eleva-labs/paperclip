@@ -252,9 +252,15 @@ describe("opencode_full local_cli execute", () => {
       status: 200,
       text: async () => JSON.stringify({
         sessionId: "remote-session-1",
-        summary: "hello from remote",
+        outputText: "hello from remote",
         usage: { inputTokens: 4, outputTokens: 9, cachedInputTokens: 1 },
         costUsd: 0.12,
+        warnings: ["remote warning"],
+        transcript: [
+          { type: "step_start", sessionID: "remote-session-1" },
+          { type: "text", part: { text: "hello from remote" } },
+          { type: "tool_use", part: { tool: "read", callID: "tool-1", state: { status: "completed", output: "done" } } },
+        ],
         resultJson: { transcript: [] },
       }),
     });
@@ -269,6 +275,7 @@ describe("opencode_full local_cli execute", () => {
       summary: "hello from remote",
       model: "openai/gpt-5.4",
       usage: { inputTokens: 4, outputTokens: 9, cachedInputTokens: 1 },
+      errorMeta: expect.objectContaining({ executionMode: "remote_server", warnings: ["remote warning"] }),
     });
     expect(result.sessionParams).toMatchObject({
       remoteSessionId: "remote-session-1",
@@ -280,6 +287,11 @@ describe("opencode_full local_cli execute", () => {
         agentId: "agent-1",
         executionMode: "remote_server",
       },
+    });
+    expect(result.resultJson).toMatchObject({
+      requestedTarget: "server-default",
+      warnings: ["remote warning"],
+      transcript: expect.any(Array),
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://opencode.example.com/sessions/execute",
@@ -350,6 +362,34 @@ describe("opencode_full local_cli execute", () => {
     expect(result).toMatchObject({
       exitCode: 1,
       errorCode: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
+    });
+  });
+
+  it("distinguishes remote ownership and target-isolation failures clearly", async () => {
+    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        text: async () => JSON.stringify({ errorCode: "REMOTE_OWNERSHIP_MISMATCH", message: "session belongs to another agent" }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        text: async () => JSON.stringify({ errorCode: "REMOTE_TARGET_ISOLATION_FAILED", message: "target namespace mismatch" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeRemoteServer(createExecutionContext(), remoteServerConfig as never)).resolves.toMatchObject({
+      exitCode: 1,
+      errorCode: "REMOTE_OWNERSHIP_MISMATCH",
+      errorMessage: "session belongs to another agent",
+    });
+
+    await expect(executeRemoteServer(createExecutionContext(), remoteServerConfig as never)).resolves.toMatchObject({
+      exitCode: 1,
+      errorCode: "REMOTE_TARGET_ISOLATION_FAILED",
+      errorMessage: "target namespace mismatch",
     });
   });
 });

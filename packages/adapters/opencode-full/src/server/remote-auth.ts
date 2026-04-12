@@ -6,6 +6,10 @@ export type RemoteAuthCheckResult =
   | { ok: true; auth: ReturnType<typeof opencodeFullRemoteAuthRuntimeSchema.parse> }
   | { ok: false; reason: string };
 
+export function isResolvedRemoteAuth(rawAuth: unknown): boolean {
+  return opencodeFullRemoteAuthRuntimeSchema.safeParse(rawAuth).success;
+}
+
 export function buildRemoteAuthHeaders(rawAuth: unknown): Record<string, string> {
   const auth = opencodeFullRemoteAuthRuntimeSchema.parse(rawAuth);
 

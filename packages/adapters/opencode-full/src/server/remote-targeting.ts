@@ -82,3 +82,7 @@ export function isRemoteTargetModeResolved(rawTarget: unknown): boolean {
 export function getRemoteTargetMode(rawTarget: unknown): OpencodeFullRemoteProjectTarget["mode"] {
   return opencodeFullRemoteProjectTargetSchema.parse(rawTarget).mode;
 }
+
+export function isExecutableRemoteTarget(rawTarget: unknown): boolean {
+  return resolveRemoteTargetIdentity(rawTarget).status === "resolved";
+}

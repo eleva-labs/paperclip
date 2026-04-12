@@ -195,6 +195,114 @@ function normalizeRemoteUsage(raw: unknown): { inputTokens: number; cachedInputT
   };
 }
 
+function normalizeRemoteWarnings(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean);
+}
+
+function extractRemoteTranscript(raw: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => parseObject(entry)).filter((entry) => Object.keys(entry).length > 0);
+}
+
+function deriveSummaryFromRemoteTranscript(transcript: Record<string, unknown>[]): string | null {
+  const messages = transcript
+    .map((entry) => {
+      const type = asString(entry.type, "");
+      if (type === "text") return asString(parseObject(entry.part).text, "").trim();
+      if (type === "message") return asString(entry.text, "").trim();
+      return "";
+    })
+    .filter(Boolean);
+  return messages.length > 0 ? messages.join("\n\n") : null;
+}
+
+function classifyRemoteExecutionFailure(input: {
+  status: number;
+  body: Record<string, unknown>;
+  rawText: string;
+}): { code: string; message: string; detail: string | null } {
+  const message =
+    asString(input.body.errorMessage, "").trim() ||
+    errorText(input.body.error ?? input.body.message).trim() ||
+    firstNonEmptyLine(input.rawText) ||
+    `Remote execution failed (${input.status}).`;
+  const errorCode =
+    asString(input.body.errorCode, "").trim() ||
+    asString(input.body.code, "").trim() ||
+    asString(parseObject(input.body.error).code, "").trim();
+  const detail = input.rawText.trim() || null;
+  const normalized = `${errorCode} ${message}`.toLowerCase();
+  const hasTargetIsolationSignal = /target|namespace|isolation|workspace/.test(normalized);
+  const hasOwnershipSignal = /ownership|owner|company|agent/.test(normalized);
+
+  if (input.status === 401 || input.status === 403 || /auth|credential|unauthoriz|forbidden/.test(normalized)) {
+    return { code: "REMOTE_AUTH_REJECTED", message, detail };
+  }
+  if (hasTargetIsolationSignal) {
+    return { code: "REMOTE_TARGET_ISOLATION_FAILED", message, detail };
+  }
+  if (input.status === 409 || input.status === 412 || hasOwnershipSignal) {
+    return { code: "REMOTE_OWNERSHIP_MISMATCH", message, detail };
+  }
+  if (input.status === 422 || /model/.test(normalized)) {
+    return { code: "REMOTE_MODEL_INVALID", message, detail };
+  }
+  if (input.status >= 500) {
+    return { code: "REMOTE_SERVER_ERROR", message, detail };
+  }
+
+  return { code: "REMOTE_EXECUTION_FAILED", message, detail };
+}
+
+function normalizeRemoteExecutionPayload(payload: unknown): {
+  remoteSessionId: string | null;
+  summary: string | null;
+  usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
+  costUsd: number;
+  warnings: string[];
+  transcript: Record<string, unknown>[];
+  resultJson: Record<string, unknown>;
+  errorMessage: string | null;
+  exitCode: number;
+} {
+  const body = parseObject(payload);
+  const resultJsonSource = parseObject(body.resultJson);
+  const transcript = extractRemoteTranscript(body.transcript ?? body.events ?? resultJsonSource.transcript);
+  const warnings = normalizeRemoteWarnings(body.warnings ?? resultJsonSource.warnings);
+  const usage = normalizeRemoteUsage(body.usage ?? resultJsonSource.usage);
+  const summary =
+    asString(body.summary, "").trim() ||
+    asString(body.outputText, "").trim() ||
+    asString(body.finalText, "").trim() ||
+    asString(body.result, "").trim() ||
+    deriveSummaryFromRemoteTranscript(transcript);
+
+  const normalizedResultJson = Object.keys(resultJsonSource).length > 0
+    ? {
+        ...resultJsonSource,
+        ...(transcript.length > 0 && !Array.isArray(resultJsonSource.transcript) ? { transcript } : {}),
+        ...(warnings.length > 0 && !Array.isArray(resultJsonSource.warnings) ? { warnings } : {}),
+      }
+    : {
+        response: payload,
+        ...(transcript.length > 0 ? { transcript } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+
+  return {
+    remoteSessionId: asString(body.remoteSessionId, "").trim() || asString(body.sessionId, "").trim() || null,
+    summary: summary || null,
+    usage,
+    costUsd: asNumber(body.costUsd, asNumber(parseObject(body.usage).costUsd, 0)),
+    warnings,
+    transcript,
+    resultJson: normalizedResultJson,
+    errorMessage: asString(body.errorMessage, "").trim() || errorText(body.error ?? body.message).trim() || null,
+    exitCode: asNumber(body.exitCode, 0),
+  };
+}
+
 function toRemoteExecutionError(code: string, message: string, detail?: string | null): AdapterExecutionResult {
   return {
     exitCode: 1,
@@ -320,25 +428,15 @@ async function executeRemoteServer(
       return toRemoteExecutionError("REMOTE_AUTH_REJECTED", `Remote server rejected authentication (${response.status}).`, rawText || null);
     }
     if (!response.ok) {
-      return toRemoteExecutionError(
-        response.status >= 500 ? "REMOTE_SERVER_ERROR" : "REMOTE_EXECUTION_FAILED",
-        `Remote execution failed (${response.status}).`,
-        rawText || null,
-      );
+      const failure = classifyRemoteExecutionFailure({ status: response.status, body: parseObject(payload), rawText });
+      return toRemoteExecutionError(failure.code, failure.message, failure.detail);
     }
 
-    const body = parseObject(payload);
-    const remoteSessionId = asString(body.remoteSessionId, "").trim() || asString(body.sessionId, "").trim();
+    const normalized = normalizeRemoteExecutionPayload(payload);
+    const remoteSessionId = normalized.remoteSessionId;
     if (!remoteSessionId) {
       return toRemoteExecutionError("REMOTE_SESSION_MISSING", "Remote execution response did not include a session id.");
     }
-
-    const summary =
-      asString(body.summary, "").trim() ||
-      asString(body.outputText, "").trim() ||
-      asString(body.result, "").trim() ||
-      null;
-    const usage = normalizeRemoteUsage(body.usage);
     const sessionParams = createRemoteSessionParams({
       companyId: ctx.agent.companyId,
       agentId: ctx.agent.id,
@@ -350,11 +448,17 @@ async function executeRemoteServer(
     });
 
     return {
-      exitCode: asNumber(body.exitCode, 0),
+      exitCode: normalized.exitCode,
       signal: null,
       timedOut: false,
-      errorMessage: asString(body.errorMessage, "").trim() || null,
-      usage,
+      errorMessage: normalized.errorMessage,
+      errorMeta: {
+        executionMode: "remote_server",
+        targetMode: target.targetMode,
+        resolvedTargetIdentity: target.resolvedTargetIdentity,
+        warnings: normalized.warnings,
+      },
+      usage: normalized.usage,
       sessionId: remoteSessionId,
       sessionParams,
       sessionDisplayId: remoteSessionId,
@@ -362,11 +466,12 @@ async function executeRemoteServer(
       biller: resolveOpenCodeBiller({}, parseModelProvider(config.model)),
       model: config.model,
       billingType: "unknown",
-      costUsd: asNumber(body.costUsd, 0),
-      resultJson: isPlainObject(body.resultJson)
-        ? body.resultJson
-        : { response: payload, requestedTarget: target.resolvedTargetIdentity },
-      summary,
+      costUsd: normalized.costUsd,
+      resultJson: {
+        ...normalized.resultJson,
+        requestedTarget: target.resolvedTargetIdentity,
+      },
+      summary: normalized.summary,
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {

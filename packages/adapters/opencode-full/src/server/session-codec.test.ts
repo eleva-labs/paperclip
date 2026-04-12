@@ -5,6 +5,7 @@ import {
   getConfigFingerprint,
   getRemoteSessionResumeDecision,
   sessionCodec,
+  shouldStartFreshRemoteSession,
 } from "./session-codec.js";
 
 const baseConfig = {
@@ -135,5 +136,15 @@ describe("opencodeFull session codec and isolation", () => {
       },
       sessionParams: session,
     })).toEqual({ shouldResume: false, reason: "config_fingerprint_mismatch" });
+
+    expect(shouldStartFreshRemoteSession({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: {
+        ...baseConfig,
+        remoteServer: { ...baseConfig.remoteServer, auth: { mode: "bearer", token: "different-token" } },
+      },
+      sessionParams: session,
+    })).toBe(true);
   });
 });

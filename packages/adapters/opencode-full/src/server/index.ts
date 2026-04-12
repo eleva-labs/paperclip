@@ -12,7 +12,7 @@ import { opencodeFullRuntimeConfigSchema } from "./config-schema.js";
 import { sessionCodec as baseSessionCodec } from "./session-codec.js";
 import { getOpencodeFullConfigSchema } from "./config-schema.js";
 import { deserializeLocalCliSessionParams, executeLocalCli, executeRemoteServer, serializeLocalCliSessionParams } from "./execute.js";
-import { listLocalCliOpenCodeModels } from "./models.js";
+import { discoverRemoteServerOpenCodeModels, listLocalCliOpenCodeModels } from "./models.js";
 import { testLocalCliEnvironment, testRemoteServerEnvironment } from "./test.js";
 
 export const sessionCodec: AdapterSessionCodec = {
@@ -150,8 +150,11 @@ export {
   type OpencodeFullRuntimeConfig,
 } from "./config-schema.js";
 export {
+  checkRemoteServerHealth,
   discoverLocalCliOpenCodeModels,
+  discoverRemoteServerOpenCodeModels,
   ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
   listLocalCliOpenCodeModels,
 } from "./models.js";
 export {
@@ -163,9 +166,10 @@ export {
   serializeLocalCliSessionParams,
   type LocalCliSessionParams,
 } from "./execute.js";
-export { buildRemoteAuthHeaders, describePersistedRemoteAuth } from "./remote-auth.js";
+export { buildRemoteAuthHeaders, describePersistedRemoteAuth, isResolvedRemoteAuth } from "./remote-auth.js";
 export {
   getRemoteTargetMode,
+  isExecutableRemoteTarget,
   isRemoteTargetModeResolved,
   resolveRemoteTargetIdentity,
   type RemoteTargetIdentityResolution,
@@ -178,6 +182,7 @@ export {
   getRemoteSessionResumeDecision,
   opencodeFullRemoteSessionParamsSchema,
   opencodeFullSessionOwnershipSchema,
+  shouldStartFreshRemoteSession,
   type OpencodeFullRemoteSessionParams,
   type OpencodeFullSessionOwnership,
 } from "./session-codec.js";

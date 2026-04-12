@@ -470,3 +470,7 @@ export async function ensureRemoteServerOpenCodeModelConfiguredAndAvailable(conf
 
   return models;
 }
+
+export function remoteServerExecutionScope(config: OpencodeFullRemoteServerRuntimeConfig): "server_default_only" | "deferred_target_mode" {
+  return config.remoteServer.projectTarget.mode === "server_default" ? "server_default_only" : "deferred_target_mode";
+}

@@ -238,4 +238,23 @@ describe("opencode_full local_cli testEnvironment", () => {
     ]));
     expect(checkRemoteServerHealth).not.toHaveBeenCalled();
   });
+
+  it("fails unsupported shared fixed_path targeting clearly instead of degrading", async () => {
+    const result = await testRemoteServerEnvironment(
+      { adapterType: "opencode_full", config: remoteServerConfig } as never,
+      {
+        ...remoteServerConfig,
+        remoteServer: {
+          ...remoteServerConfig.remoteServer,
+          projectTarget: { mode: "fixed_path", projectPath: "/srv/shared/company-a", requireDedicatedServer: false },
+        },
+      } as never,
+    );
+
+    expect(result.status).toBe("fail");
+    expect(result.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "opencode_remote_target_not_proven", level: "error" }),
+    ]));
+    expect(checkRemoteServerHealth).not.toHaveBeenCalled();
+  });
 });

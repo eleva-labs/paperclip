@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { isExecutableRemoteTarget, resolveRemoteTargetIdentity } from "./remote-targeting.js";
 
 describe("resolveRemoteTargetIdentity", () => {
   it("resolves server_default to a stable target identity", () => {
@@ -53,5 +53,8 @@ describe("resolveRemoteTargetIdentity", () => {
       targetMode: "fixed_path",
       code: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
     });
+
+    expect(isExecutableRemoteTarget({ mode: "server_default", requireDedicatedServer: false })).toBe(true);
+    expect(isExecutableRemoteTarget({ mode: "paperclip_workspace", requireDedicatedServer: false })).toBe(false);
   });
 });

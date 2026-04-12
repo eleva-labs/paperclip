@@ -192,7 +192,7 @@ export async function testRemoteServerEnvironment(
       code: "opencode_remote_target_not_proven",
       level: target.status === "conditional" ? "warn" : "error",
       message: target.message,
-      detail: `Config-only remote_server checks will not approximate target mode ${target.targetMode}.`,
+      detail: `Config-only remote_server checks will not approximate target mode ${target.targetMode}; Cycle 4.1 execution support remains limited to server_default only.`,
     });
     return { adapterType: "opencode_full", status: summarizeStatus(checks), checks, testedAt };
   }

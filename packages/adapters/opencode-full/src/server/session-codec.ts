@@ -162,6 +162,15 @@ export function getRemoteSessionResumeDecision(input: {
     : { shouldResume: false, reason: decision.reason };
 }
 
+export function shouldStartFreshRemoteSession(input: {
+  companyId: string;
+  agentId: string;
+  config: unknown;
+  sessionParams: unknown;
+}): boolean {
+  return !getRemoteSessionResumeDecision(input).shouldResume;
+}
+
 export const sessionCodec = {
   deserialize(raw: unknown): Record<string, unknown> | null {
     if (!isRecord(raw)) return null;

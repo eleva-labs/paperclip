@@ -35,8 +35,10 @@ Design rules:
 - runtime execution consumes only runtime-resolved remote auth values
 - remote resume is gated by ownership, config fingerprint, base URL, target mode, and resolved target identity
 
-Cycle 1.1 note:
-- local_cli and remote_server runtime behavior are scaffolded only here
+Cycle 4.1 note:
+- local_cli remains the parity baseline
+- remote_server execution is implemented only for the proven-safe server_default target
+- paperclip_workspace, server_managed_namespace, and fixed_path remain deferred or unsupported
 - local_sdk exists only as a deferred schema branch and is not executable
 `;
 

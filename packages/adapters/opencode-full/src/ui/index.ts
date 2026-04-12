@@ -1,5 +1,7 @@
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
+export { parseOpenCodeFullStdoutLine as parseStdoutLine } from "../ui-parser.js";
+
 function parseJsonObject(text: unknown): Record<string, unknown> | undefined {
   if (typeof text !== "string") return undefined;
   const trimmed = text.trim();
@@ -39,12 +41,16 @@ export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<stri
       env: parseJsonObject(raw["localCli.env"]),
     };
   } else if (executionMode === "remote_server") {
+    const parsedRemoteTarget = parseJsonObject(raw["remoteServer.projectTarget"]);
+    const remoteTargetMode = typeof raw["remoteServer.projectTarget.mode"] === "string"
+      ? raw["remoteServer.projectTarget.mode"]
+      : undefined;
     config.remoteServer = {
       baseUrl: raw["remoteServer.baseUrl"],
       auth: parseJsonObject(raw["remoteServer.auth"]) ?? { mode: "none" },
       healthTimeoutSec: raw["remoteServer.healthTimeoutSec"] ?? 10,
       requireHealthyServer: raw["remoteServer.requireHealthyServer"] ?? true,
-      projectTarget: parseJsonObject(raw["remoteServer.projectTarget"]) ?? { mode: "server_default" },
+      projectTarget: parsedRemoteTarget ?? { mode: remoteTargetMode ?? "server_default" },
     };
   } else if (executionMode === "local_sdk") {
     config.localSdk = {
