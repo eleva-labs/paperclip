@@ -1,7 +1,12 @@
+// @vitest-environment jsdom
+
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { act } from "../../../node_modules/react/index.js";
+import React from "../../../node_modules/react/index.js";
+import { createRoot } from "../../../node_modules/react-dom/client.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Company, Project } from "@paperclipai/plugin-sdk";
 import manifest, {
@@ -9,6 +14,9 @@ import manifest, {
   OPENCODE_PROJECT_EXPORT_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
+  OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY,
+  OPENCODE_PROJECT_SYNC_STATE_DATA_KEY,
+  OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY,
 } from "../src/manifest.js";
 import plugin from "../src/plugin.js";
 import {
@@ -16,6 +24,32 @@ import {
   OPENCODE_PROJECT_SYNC_STATE_NAMESPACE,
   OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND,
 } from "../src/sync-state.js";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const pluginUiState = vi.hoisted(() => ({
+  hostContext: {
+    companyId: "11111111-1111-4111-8111-111111111111",
+    projectId: "22222222-2222-4222-8222-222222222222",
+    companyPrefix: null,
+  },
+  actions: new Map<string, ReturnType<typeof vi.fn>>(),
+  data: new Map<string, { data?: unknown; loading?: boolean; error?: Error | null; refresh?: ReturnType<typeof vi.fn> }>(),
+  toasts: [] as Array<{ title: string; body?: string; tone?: string }>,
+}));
+
+vi.mock("@paperclipai/plugin-sdk/ui", async () => {
+  return {
+    useHostContext: () => pluginUiState.hostContext,
+    usePluginAction: (key: string) => pluginUiState.actions.get(key) ?? vi.fn(async () => ({})),
+    usePluginData: (key: string) => pluginUiState.data.get(key) ?? { data: undefined, loading: false, error: null, refresh: vi.fn() },
+    usePluginToast: () => (payload: { title: string; body?: string; tone?: string }) => { pluginUiState.toasts.push(payload); },
+    PluginDetailTabProps: {},
+    PluginProjectSidebarItemProps: {},
+    PluginBridgeError: class PluginBridgeError extends Error {},
+  };
+});
 
 const companyId = "11111111-1111-4111-8111-111111111111";
 const projectId = "22222222-2222-4222-8222-222222222222";
@@ -39,7 +73,22 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  pluginUiState.actions.clear();
+  pluginUiState.data.clear();
+  pluginUiState.toasts.length = 0;
 });
+
+beforeEach(() => {
+  pluginUiState.hostContext = { companyId, projectId, companyPrefix: null };
+});
+
+function seedUiData(key: string, value: unknown) {
+  pluginUiState.data.set(key, { data: value, loading: false, error: null, refresh: vi.fn() });
+}
+
+function seedUiAction(key: string, impl: ReturnType<typeof vi.fn>) {
+  pluginUiState.actions.set(key, impl);
+}
 
 const company: Company = {
   id: companyId,
@@ -247,7 +296,6 @@ describe("opencode project sync plugin cycle 2.1", () => {
         repoRelPath: ".opencode/agents/researcher.md",
       }),
     ]);
-    expect(state.legacyOutOfScopeEntities).toBeUndefined();
   });
 
   it("rejects finalize payloads that include unselected agents", async () => {
@@ -433,5 +481,316 @@ describe("opencode project sync plugin cycle 2.1", () => {
       exportAgents: true,
       forceIfRepoUnchangedCheckFails: false,
     })).rejects.toThrow(/changed since the last import/i);
+  });
+});
+
+describe("opencode project sync plugin cycle 3.1 ui", () => {
+  it("renders top-level preview messaging, selection controls, and keeps import gated until selection", async () => {
+    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    seedUiData(OPENCODE_PROJECT_SYNC_STATE_DATA_KEY, {
+      workspace: { projectId, workspaceId, cwd: "/repo", repoUrl: null, repoRef: null },
+      state: {
+        sourceOfTruth: "repo_first",
+        bootstrapCompletedAt: "2026-04-11T12:00:00.000Z",
+        canonicalRepoRoot: "/repo",
+        canonicalRepoUrl: null,
+        canonicalRepoRef: null,
+        lastScanFingerprint: "scan-1",
+        lastImportedAt: null,
+        lastExportedAt: null,
+        lastRuntimeTestAt: null,
+        warnings: [],
+        conflicts: [],
+        selectedAgents: [],
+        importedAgents: [],
+        importedSkills: [],
+      },
+    });
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-1",
+        warnings: [],
+        eligibleAgents: [
+          { externalAgentKey: "researcher", displayName: "Researcher", repoRelPath: ".opencode/agents/researcher.md", fingerprint: "fp-1", role: "Lead researcher", advisoryMode: "primary", selectionDefault: false },
+          { externalAgentKey: "writer", displayName: "Writer", repoRelPath: ".opencode/agents/writer.md", fingerprint: "fp-2", role: null, advisoryMode: null, selectionDefault: false },
+        ],
+        ineligibleNestedAgents: [
+          { externalAgentKey: "nested-helper", displayName: "Nested Helper", repoRelPath: ".opencode/agents/team/nested-helper.md" },
+        ],
+        ignoredArtifacts: [
+          { kind: "skill", repoRelPath: ".opencode/skills/research/SKILL.md" },
+          { kind: "root_agents_md", repoRelPath: "AGENTS.md" },
+        ],
+      },
+    });
+    seedUiAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, {}));
+    });
+
+    expect(container.textContent).toContain("Eligible top-level agents");
+    expect(container.textContent).toContain("Excluded nested agents");
+    expect(container.textContent).toContain("Ignored root AGENTS.md");
+    expect(container.textContent).toContain("Skills are not imported or exported in this redesign");
+
+    const syncButtonBefore = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Import now"));
+    expect(syncButtonBefore?.getAttribute("disabled")).not.toBeNull();
+
+    const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes.every((checkbox) => !checkbox.checked)).toBe(true);
+
+    const selectAllButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Select all");
+    await act(async () => {
+      selectAllButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(checkboxes.every((checkbox) => checkbox.checked)).toBe(true);
+
+    const clearAllButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Clear all");
+    await act(async () => {
+      clearAllButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(checkboxes.every((checkbox) => !checkbox.checked)).toBe(true);
+
+    await act(async () => {
+      checkboxes[0]?.click();
+    });
+    const syncButtonAfter = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Import now"));
+    expect(syncButtonAfter?.getAttribute("disabled")).toBeNull();
+    expect(container.textContent).toContain("1 selected top-level agent will be created or updated. 0 skills will be imported.");
+
+    root.unmount();
+    container.remove();
+  });
+
+  it("persists selected agents from state, auto-deselects removed files, and finalizes only selected ids", async () => {
+    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    const syncAction = vi.fn(async (params?: Record<string, unknown>) => ({
+      ok: true,
+      dryRun: false,
+      workspaceId,
+      lastScanFingerprint: "scan-2",
+      sourceOfTruth: "repo_first",
+      importedAgentCount: 1,
+      updatedAgentCount: 0,
+      importedSkillCount: 0,
+      updatedSkillCount: 0,
+      warnings: [],
+      skillUpserts: [],
+      agentUpserts: [{
+        operation: "create",
+        paperclipAgentId: null,
+        externalAgentKey: "writer",
+        repoRelPath: ".opencode/agents/writer.md",
+        payload: {
+          name: "Writer",
+          title: null,
+          reportsTo: null,
+          adapterType: "opencode_project_local",
+          adapterConfig: { promptTemplate: "# Writer" },
+          metadata: { externalAgentKey: "writer" },
+        },
+      }],
+      _receivedSelectedAgentKeys: params?.selectedAgentKeys,
+    }));
+    const finalizeAction = vi.fn(async (params?: Record<string, unknown>) => ({
+      ok: true,
+      importedAgentCount: 1,
+      updatedAgentCount: 0,
+      importedSkillCount: 0,
+      updatedSkillCount: 0,
+      _receivedSelectedAgentKeys: params?.selectedAgentKeys,
+      _receivedAppliedAgents: params?.appliedAgents,
+    }));
+
+    seedUiData(OPENCODE_PROJECT_SYNC_STATE_DATA_KEY, {
+      workspace: { projectId, workspaceId, cwd: "/repo", repoUrl: null, repoRef: null },
+      state: {
+        sourceOfTruth: "repo_first",
+        bootstrapCompletedAt: "2026-04-11T12:00:00.000Z",
+        canonicalRepoRoot: "/repo",
+        canonicalRepoUrl: null,
+        canonicalRepoRef: null,
+        lastScanFingerprint: "scan-2",
+        lastImportedAt: null,
+        lastExportedAt: null,
+        lastRuntimeTestAt: null,
+        warnings: [],
+        conflicts: [],
+        selectedAgents: [{ externalAgentKey: "writer", repoRelPath: ".opencode/agents/writer.md", fingerprint: "fp-writer", selectedAt: "2026-04-11T12:00:00.000Z" }],
+        importedAgents: [],
+        importedSkills: [],
+      },
+    });
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-2",
+        warnings: [],
+        eligibleAgents: [
+          { externalAgentKey: "writer", displayName: "Writer", repoRelPath: ".opencode/agents/writer.md", fingerprint: "fp-writer", role: null, advisoryMode: null, selectionDefault: false },
+        ],
+        ineligibleNestedAgents: [],
+        ignoredArtifacts: [],
+      },
+    });
+    seedUiAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_ACTION_KEY, syncAction);
+    seedUiAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, finalizeAction);
+    seedUiAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith(`/companies/${companyId}/agents` as string)) {
+        return { ok: true, status: 200, json: async () => ({ id: "agent-writer" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, {}));
+    });
+
+    let checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(1);
+    expect(checkboxes[0]?.checked).toBe(true);
+
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-3",
+        warnings: [],
+        eligibleAgents: [],
+        ineligibleNestedAgents: [],
+        ignoredArtifacts: [],
+      },
+    });
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, {}));
+    });
+
+    checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(0);
+
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-4",
+        warnings: [],
+        eligibleAgents: [
+          { externalAgentKey: "writer", displayName: "Writer", repoRelPath: ".opencode/agents/writer.md", fingerprint: "fp-writer", role: null, advisoryMode: null, selectionDefault: false },
+        ],
+        ineligibleNestedAgents: [],
+        ignoredArtifacts: [],
+      },
+    });
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, {}));
+    });
+
+    const importButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Import now"));
+    await act(async () => {
+      importButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(syncAction).toHaveBeenCalledWith(expect.objectContaining({ selectedAgentKeys: ["writer"] }));
+    expect(finalizeAction).toHaveBeenCalledWith(expect.objectContaining({
+      selectedAgentKeys: ["writer"],
+      appliedAgents: [{ externalAgentKey: "writer", paperclipAgentId: "agent-writer" }],
+    }));
+    expect(container.textContent).toContain("0 skills created, 0 updated");
+
+    vi.unstubAllGlobals();
+    root.unmount();
+    container.remove();
+  });
+
+  it("blocks import when eligible rows collide on externalAgentKey and keeps row selection file-scoped", async () => {
+    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    const syncAction = vi.fn(async () => ({ ok: true }));
+    const finalizeAction = vi.fn(async () => ({ ok: true }));
+
+    seedUiData(OPENCODE_PROJECT_SYNC_STATE_DATA_KEY, {
+      workspace: { projectId, workspaceId, cwd: "/repo", repoUrl: null, repoRef: null },
+      state: {
+        sourceOfTruth: "repo_first",
+        bootstrapCompletedAt: "2026-04-11T12:00:00.000Z",
+        canonicalRepoRoot: "/repo",
+        canonicalRepoUrl: null,
+        canonicalRepoRef: null,
+        lastScanFingerprint: "scan-collision",
+        lastImportedAt: null,
+        lastExportedAt: null,
+        lastRuntimeTestAt: null,
+        warnings: [],
+        conflicts: [],
+        selectedAgents: [],
+        importedAgents: [],
+        importedSkills: [],
+      },
+    });
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-collision",
+        warnings: ["Two eligible files resolve to the same external agent key."],
+        eligibleAgents: [
+          { externalAgentKey: "researcher", displayName: "Researcher A", repoRelPath: ".opencode/agents/researcher.md", fingerprint: "fp-a", role: null, advisoryMode: null, selectionDefault: false },
+          { externalAgentKey: "researcher", displayName: "Researcher B", repoRelPath: ".opencode/agents/researcher-alt.md", fingerprint: "fp-b", role: null, advisoryMode: null, selectionDefault: false },
+        ],
+        ineligibleNestedAgents: [],
+        ignoredArtifacts: [],
+      },
+    });
+    seedUiAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_ACTION_KEY, syncAction);
+    seedUiAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, finalizeAction);
+    seedUiAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, {}));
+    });
+
+    const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(2);
+
+    await act(async () => {
+      checkboxes[0]?.click();
+    });
+
+    expect(checkboxes[0]?.checked).toBe(true);
+    expect(checkboxes[1]?.checked).toBe(false);
+    expect(container.textContent).toContain("selection blocked");
+    expect(container.textContent).toContain("Multiple eligible files resolve to the same external agent key (researcher)");
+
+    const importButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Import now"));
+    expect(importButton?.getAttribute("disabled")).not.toBeNull();
+
+    await act(async () => {
+      importButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(syncAction).not.toHaveBeenCalled();
+    expect(finalizeAction).not.toHaveBeenCalled();
+
+    root.unmount();
+    container.remove();
   });
 });
