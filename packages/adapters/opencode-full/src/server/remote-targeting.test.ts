@@ -10,7 +10,7 @@ describe("resolveRemoteTargetIdentity", () => {
       status: "resolved",
       targetMode: "server_default",
       resolvedTargetIdentity: "server-default",
-      message: "Cycle 1.1 supports only the server_default remote target identity.",
+      message: "server_default is the safe baseline remote target identity proven in the Cycle 3.1 spike.",
     });
   });
 
@@ -21,7 +21,7 @@ describe("resolveRemoteTargetIdentity", () => {
     })).toMatchObject({
       status: "conditional",
       targetMode: "paperclip_workspace",
-      code: "TARGET_MODE_DEFERRED",
+      code: "TARGET_MODE_REQUIRES_RUNTIME_PROBE",
     });
 
     expect(resolveRemoteTargetIdentity({
@@ -31,7 +31,7 @@ describe("resolveRemoteTargetIdentity", () => {
     })).toMatchObject({
       status: "conditional",
       targetMode: "server_managed_namespace",
-      code: "TARGET_MODE_DEFERRED",
+      code: "TARGET_MODE_REQUIRES_SERVER_ISOLATION_PROOF",
     });
 
     expect(resolveRemoteTargetIdentity({
@@ -39,9 +39,19 @@ describe("resolveRemoteTargetIdentity", () => {
       projectPath: "/srv/opencode/company-a",
       requireDedicatedServer: true,
     })).toMatchObject({
+      status: "conditional",
+      targetMode: "fixed_path",
+      code: "TARGET_MODE_REQUIRES_DEDICATED_SERVER",
+    });
+
+    expect(resolveRemoteTargetIdentity({
+      mode: "fixed_path",
+      projectPath: "/srv/opencode/shared",
+      requireDedicatedServer: false,
+    })).toMatchObject({
       status: "unsupported",
       targetMode: "fixed_path",
-      code: "TARGET_MODE_UNSUPPORTED_IN_CYCLE_1_1",
+      code: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
     });
   });
 });

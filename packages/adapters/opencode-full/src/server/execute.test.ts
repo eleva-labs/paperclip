@@ -7,6 +7,7 @@ const resolveCommandForLogs = vi.fn(async (command: string) => command);
 const runChildProcess = vi.fn();
 const prepareLocalCliRuntimeConfig = vi.fn();
 const ensureLocalCliOpenCodeModelConfiguredAndAvailable = vi.fn();
+const ensureRemoteServerOpenCodeModelConfiguredAndAvailable = vi.fn();
 
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   const actual = await vi.importActual<typeof import("@paperclipai/adapter-utils/server-utils")>(
@@ -25,9 +26,10 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
 vi.mock("./models.js", () => ({
   prepareLocalCliRuntimeConfig,
   ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
 }));
 
-import { executeLocalCli } from "./execute.js";
+import { executeLocalCli, executeRemoteServer } from "./execute.js";
 import { sessionCodec } from "./index.js";
 
 const localCliConfig = {
@@ -45,6 +47,24 @@ const localCliConfig = {
     dangerouslySkipPermissions: false,
     graceSec: 5,
     env: {},
+  },
+};
+
+const remoteServerConfig = {
+  executionMode: "remote_server" as const,
+  model: "openai/gpt-5.4",
+  variant: "fast",
+  timeoutSec: 120,
+  connectTimeoutSec: 10,
+  eventStreamIdleTimeoutSec: 30,
+  failFastWhenUnavailable: true,
+  promptTemplate: "You are {{agent.id}}.",
+  remoteServer: {
+    baseUrl: "https://opencode.example.com",
+    auth: { mode: "bearer" as const, token: "resolved-token" },
+    healthTimeoutSec: 10,
+    requireHealthyServer: true,
+    projectTarget: { mode: "server_default" as const, requireDedicatedServer: false },
   },
 };
 
@@ -79,6 +99,8 @@ describe("opencode_full local_cli execute", () => {
     runChildProcess.mockReset();
     prepareLocalCliRuntimeConfig.mockReset();
     ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockReset();
+    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockReset();
+    vi.unstubAllGlobals();
   });
 
   it("normalizes a successful local_cli execution result", async () => {
@@ -220,6 +242,114 @@ describe("opencode_full local_cli execute", () => {
       sessionId: "fresh-session",
       clearSession: true,
       summary: "recovered",
+    });
+  });
+
+  it("normalizes a minimal remote server_default execution and persists remote ownership", async () => {
+    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        sessionId: "remote-session-1",
+        summary: "hello from remote",
+        usage: { inputTokens: 4, outputTokens: 9, cachedInputTokens: 1 },
+        costUsd: 0.12,
+        resultJson: { transcript: [] },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeRemoteServer(createExecutionContext(), remoteServerConfig as never);
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      sessionId: "remote-session-1",
+      sessionDisplayId: "remote-session-1",
+      summary: "hello from remote",
+      model: "openai/gpt-5.4",
+      usage: { inputTokens: 4, outputTokens: 9, cachedInputTokens: 1 },
+    });
+    expect(result.sessionParams).toMatchObject({
+      remoteSessionId: "remote-session-1",
+      baseUrl: "https://opencode.example.com",
+      projectTargetMode: "server_default",
+      resolvedTargetIdentity: "server-default",
+      ownership: {
+        companyId: "company-1",
+        agentId: "agent-1",
+        executionMode: "remote_server",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://opencode.example.com/sessions/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer resolved-token" }),
+      }),
+    );
+  });
+
+  it("refuses remote resume when any gating field changes", async () => {
+    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ sessionId: "remote-session-2", summary: "fresh" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onLog = vi.fn(async () => {});
+
+    const result = await executeRemoteServer(
+      createExecutionContext({
+        runtime: {
+          sessionId: "remote-session-1",
+          sessionDisplayId: "remote-session-1",
+          taskKey: null,
+          sessionParams: {
+            ownership: {
+              companyId: "company-1",
+              agentId: "agent-1",
+              adapterType: "opencode_full",
+              executionMode: "remote_server",
+              configFingerprint: JSON.stringify({ changed: false }),
+            },
+            baseUrl: "https://opencode.example.com",
+            remoteSessionId: "remote-session-1",
+            projectTargetMode: "server_default",
+            resolvedTargetIdentity: "server-default",
+            canonicalWorkspaceId: null,
+            canonicalWorkspaceCwd: null,
+            serverScope: "unknown",
+            createdAt: "2026-04-11T12:00:00.000Z",
+          },
+        },
+        onLog,
+      }),
+      remoteServerConfig as never,
+    );
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(body.sessionId).toBeNull();
+    expect(onLog).toHaveBeenCalledWith("stdout", expect.stringContaining("Remote session resume refused"));
+    expect(result.sessionId).toBe("remote-session-2");
+  });
+
+  it("fails clearly for unsupported remote target modes", async () => {
+    const result = await executeRemoteServer(
+      createExecutionContext(),
+      {
+        ...remoteServerConfig,
+        remoteServer: {
+          ...remoteServerConfig.remoteServer,
+          projectTarget: { mode: "fixed_path", projectPath: "/srv/shared/company-a", requireDedicatedServer: false },
+        },
+      } as never,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      errorCode: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
     });
   });
 });

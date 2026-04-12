@@ -4,7 +4,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
 import { asBoolean, asString, ensurePathInEnv, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
-import type { OpencodeFullLocalCliRuntimeConfig } from "./config-schema.js";
+import type { OpencodeFullLocalCliRuntimeConfig, OpencodeFullRemoteServerRuntimeConfig } from "./config-schema.js";
+import { buildRemoteAuthHeaders, validateResolvedRemoteAuth } from "./remote-auth.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
 const MODELS_DISCOVERY_TIMEOUT_MS = 20_000;
@@ -285,4 +286,187 @@ export async function listLocalCliOpenCodeModels(config?: OpencodeFullLocalCliRu
 
 export function resetLocalCliOpenCodeModelsCacheForTests() {
   discoveryCache.clear();
+}
+
+const REMOTE_FETCH_DEFAULT_TIMEOUT_MS = 10_000;
+
+type RemoteServerHealthResult = {
+  ok: boolean;
+  failureKind?: "unreachable" | "auth_unresolved" | "auth_rejected" | "unhealthy";
+  status: number;
+  message: string;
+  detail?: string;
+};
+
+function joinUrl(baseUrl: string, pathname: string): string {
+  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const pathValue = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `${base}${pathValue}`;
+}
+
+function firstResponseTextLine(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+function normalizeRemoteFetchError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function fetchRemoteJson(input: {
+  baseUrl: string;
+  path: string;
+  auth: unknown;
+  timeoutSec: number;
+  method?: "GET" | "POST";
+  body?: Record<string, unknown>;
+}): Promise<{ ok: boolean; status: number; text: string; data: unknown }> {
+  const authCheck = validateResolvedRemoteAuth(input.auth);
+  if (!authCheck.ok) {
+    throw new Error(authCheck.reason);
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1, input.timeoutSec) * 1000 || REMOTE_FETCH_DEFAULT_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(joinUrl(input.baseUrl, input.path), {
+      method: input.method ?? "GET",
+      headers: {
+        Accept: "application/json",
+        ...((input.method ?? "GET") === "POST" ? { "Content-Type": "application/json" } : {}),
+        ...buildRemoteAuthHeaders(authCheck.auth),
+      },
+      body: input.body ? JSON.stringify(input.body) : undefined,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: response.ok, status: response.status, text, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseRemoteModelsPayload(payload: unknown): AdapterModel[] {
+  const source =
+    Array.isArray(payload) ? payload
+    : isPlainObject(payload) && Array.isArray(payload.models) ? payload.models
+    : [];
+
+  const parsed: AdapterModel[] = [];
+  for (const entry of source) {
+    if (typeof entry === "string") {
+      const id = entry.trim();
+      if (id) parsed.push({ id, label: id });
+      continue;
+    }
+    if (!isPlainObject(entry)) continue;
+    const id = asString(entry.id, "").trim() || asString(entry.name, "").trim() || asString(entry.model, "").trim();
+    if (!id) continue;
+    const label = asString(entry.label, "").trim() || id;
+    parsed.push({ id, label });
+  }
+
+  return sortModels(dedupeModels(parsed));
+}
+
+export async function checkRemoteServerHealth(config: OpencodeFullRemoteServerRuntimeConfig): Promise<RemoteServerHealthResult> {
+  const authCheck = validateResolvedRemoteAuth(config.remoteServer.auth);
+  if (!authCheck.ok) {
+    return {
+      ok: false,
+      failureKind: "auth_unresolved",
+      status: 0,
+      message: authCheck.reason,
+    };
+  }
+
+  try {
+    const response = await fetchRemoteJson({
+      baseUrl: config.remoteServer.baseUrl,
+      path: "/health",
+      auth: authCheck.auth,
+      timeoutSec: config.remoteServer.healthTimeoutSec,
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        failureKind: "auth_rejected",
+        status: response.status,
+        message: `Remote server rejected authentication (${response.status}).`,
+        detail: firstResponseTextLine(response.text),
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        failureKind: "unhealthy",
+        status: response.status,
+        message: `Remote server health check failed (${response.status}).`,
+        detail: firstResponseTextLine(response.text),
+      };
+    }
+
+    return {
+      ok: true,
+      status: response.status,
+      message: "Remote server health check succeeded.",
+      detail: isPlainObject(response.data) ? asString(response.data.status, "").trim() || undefined : undefined,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      failureKind: "unreachable",
+      status: 0,
+      message: `Remote server health check could not reach ${config.remoteServer.baseUrl}.`,
+      detail: normalizeRemoteFetchError(err),
+    };
+  }
+}
+
+export async function discoverRemoteServerOpenCodeModels(config: OpencodeFullRemoteServerRuntimeConfig): Promise<AdapterModel[]> {
+  const response = await fetchRemoteJson({
+    baseUrl: config.remoteServer.baseUrl,
+    path: "/models",
+    auth: config.remoteServer.auth,
+    timeoutSec: config.connectTimeoutSec,
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`Remote server rejected authentication (${response.status}) during model discovery.`);
+  }
+  if (!response.ok) {
+    const detail = firstResponseTextLine(response.text);
+    throw new Error(detail ? `Remote model discovery failed (${response.status}): ${detail}` : `Remote model discovery failed (${response.status}).`);
+  }
+
+  return parseRemoteModelsPayload(response.data);
+}
+
+export async function ensureRemoteServerOpenCodeModelConfiguredAndAvailable(config: OpencodeFullRemoteServerRuntimeConfig): Promise<AdapterModel[]> {
+  const model = config.model.trim();
+  if (!model) {
+    throw new Error("OpenCode remote_server requires `adapterConfig.model` in provider/model format.");
+  }
+
+  const models = await discoverRemoteServerOpenCodeModels(config);
+  if (models.length === 0) {
+    throw new Error("Remote server returned no models.");
+  }
+  if (!models.some((entry) => entry.id === model)) {
+    const sample = models.slice(0, 12).map((entry) => entry.id).join(", ");
+    throw new Error(
+      `Configured remote OpenCode model is unavailable: ${model}. Available models: ${sample}${models.length > 12 ? ", ..." : ""}`,
+    );
+  }
+
+  return models;
 }

@@ -18,8 +18,11 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
 });
 
 import {
+  checkRemoteServerHealth,
   discoverLocalCliOpenCodeModels,
+  discoverRemoteServerOpenCodeModels,
   ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
   prepareLocalCliRuntimeConfig,
   resetLocalCliOpenCodeModelsCacheForTests,
 } from "./models.js";
@@ -40,6 +43,22 @@ const localCliConfig = {
   },
 };
 
+const remoteServerConfig = {
+  executionMode: "remote_server" as const,
+  model: "openai/gpt-5.4",
+  timeoutSec: 120,
+  connectTimeoutSec: 10,
+  eventStreamIdleTimeoutSec: 30,
+  failFastWhenUnavailable: true,
+  remoteServer: {
+    baseUrl: "https://opencode.example.com",
+    auth: { mode: "bearer" as const, token: "resolved-token" },
+    healthTimeoutSec: 5,
+    requireHealthyServer: true,
+    projectTarget: { mode: "server_default" as const, requireDedicatedServer: false },
+  },
+};
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -56,6 +75,7 @@ describe("opencode_full local_cli models/runtime config", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+    vi.unstubAllGlobals();
   });
 
   it("prepares staged runtime config while preserving local project config by default", async () => {
@@ -145,5 +165,91 @@ describe("opencode_full local_cli models/runtime config", () => {
         config: localCliConfig,
       }),
     ).rejects.toThrow(/Configured OpenCode model is unavailable: openai\/gpt-5\.4/);
+  });
+
+  it("checks remote health with resolved credentials only", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: "ok" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await checkRemoteServerHealth(remoteServerConfig);
+
+    expect(result).toMatchObject({ ok: true, status: 200 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://opencode.example.com/health",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer resolved-token" }),
+      }),
+    );
+  });
+
+  it("classifies unresolved auth, rejected auth, unhealthy server, and unreachable transport distinctly", async () => {
+    const unresolved = await checkRemoteServerHealth({
+      ...remoteServerConfig,
+      remoteServer: {
+        ...remoteServerConfig.remoteServer,
+        auth: { mode: "bearer", token: { secretRef: "paperclip:secret:remote-token" } } as never,
+      },
+    });
+    expect(unresolved).toMatchObject({ ok: false, failureKind: "auth_unresolved", status: 0 });
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "unauthorized",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => "degraded",
+      })
+      .mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(checkRemoteServerHealth(remoteServerConfig)).resolves.toMatchObject({
+      ok: false,
+      failureKind: "auth_rejected",
+      status: 401,
+    });
+    await expect(checkRemoteServerHealth(remoteServerConfig)).resolves.toMatchObject({
+      ok: false,
+      failureKind: "unhealthy",
+      status: 503,
+    });
+    await expect(checkRemoteServerHealth(remoteServerConfig)).resolves.toMatchObject({
+      ok: false,
+      failureKind: "unreachable",
+      status: 0,
+    });
+  });
+
+  it("discovers and validates remote models", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ models: [{ id: "openai/gpt-5.4" }, "openai/gpt-4.1"] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(discoverRemoteServerOpenCodeModels(remoteServerConfig)).resolves.toEqual([
+      { id: "openai/gpt-4.1", label: "openai/gpt-4.1" },
+      { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },
+    ]);
+    await expect(ensureRemoteServerOpenCodeModelConfiguredAndAvailable(remoteServerConfig)).resolves.toEqual(expect.any(Array));
+  });
+
+  it("fails remote model discovery cleanly on auth rejection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "unauthorized",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(discoverRemoteServerOpenCodeModels(remoteServerConfig)).rejects.toThrow(/rejected authentication/i);
   });
 });

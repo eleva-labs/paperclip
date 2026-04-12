@@ -2,6 +2,10 @@ import { opencodeFullRemoteAuthPersistedSchema, opencodeFullRemoteAuthRuntimeSch
 
 export { opencodeFullRemoteAuthPersistedSchema, opencodeFullRemoteAuthRuntimeSchema };
 
+export type RemoteAuthCheckResult =
+  | { ok: true; auth: ReturnType<typeof opencodeFullRemoteAuthRuntimeSchema.parse> }
+  | { ok: false; reason: string };
+
 export function buildRemoteAuthHeaders(rawAuth: unknown): Record<string, string> {
   const auth = opencodeFullRemoteAuthRuntimeSchema.parse(rawAuth);
 
@@ -19,6 +23,18 @@ export function buildRemoteAuthHeaders(rawAuth: unknown): Record<string, string>
   }
 
   return {};
+}
+
+export function validateResolvedRemoteAuth(rawAuth: unknown): RemoteAuthCheckResult {
+  const parsed = opencodeFullRemoteAuthRuntimeSchema.safeParse(rawAuth);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      reason: "Remote auth must be runtime-resolved before it reaches opencode_full remote_server execution/testing.",
+    };
+  }
+
+  return { ok: true, auth: parsed.data };
 }
 
 export function describePersistedRemoteAuth(rawAuth: unknown): string {

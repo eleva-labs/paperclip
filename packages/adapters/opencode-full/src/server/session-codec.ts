@@ -150,6 +150,18 @@ export function canResumeRemoteSession(input: {
   return { ok: true };
 }
 
+export function getRemoteSessionResumeDecision(input: {
+  companyId: string;
+  agentId: string;
+  config: unknown;
+  sessionParams: unknown;
+}): { shouldResume: boolean; reason: string | null } {
+  const decision = canResumeRemoteSession(input);
+  return decision.ok
+    ? { shouldResume: true, reason: null }
+    : { shouldResume: false, reason: decision.reason };
+}
+
 export const sessionCodec = {
   deserialize(raw: unknown): Record<string, unknown> | null {
     if (!isRecord(raw)) return null;

@@ -17,8 +17,15 @@ import {
   runChildProcess,
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
-import type { OpencodeFullLocalCliRuntimeConfig } from "./config-schema.js";
-import { ensureLocalCliOpenCodeModelConfiguredAndAvailable, prepareLocalCliRuntimeConfig } from "./models.js";
+import type { OpencodeFullLocalCliRuntimeConfig, OpencodeFullRemoteServerRuntimeConfig } from "./config-schema.js";
+import {
+  ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
+  prepareLocalCliRuntimeConfig,
+} from "./models.js";
+import { buildRemoteAuthHeaders, validateResolvedRemoteAuth } from "./remote-auth.js";
+import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { createRemoteSessionParams, getRemoteSessionResumeDecision } from "./session-codec.js";
 
 type ParsedJsonlResult = {
   sessionId: string | null;
@@ -36,6 +43,10 @@ export type LocalCliSessionParams = {
   repoUrl?: string;
   repoRef?: string;
 };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function firstNonEmptyLine(text: string): string {
   return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
@@ -167,6 +178,214 @@ export function deserializeLocalCliSessionParams(raw: unknown): LocalCliSessionP
 export function serializeLocalCliSessionParams(params: Record<string, unknown> | null): Record<string, unknown> | null {
   const parsed = deserializeLocalCliSessionParams(params);
   return parsed ? { ...parsed } : null;
+}
+
+function joinRemoteUrl(baseUrl: string, pathname: string): string {
+  const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const pathValue = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `${base}${pathValue}`;
+}
+
+function normalizeRemoteUsage(raw: unknown): { inputTokens: number; cachedInputTokens: number; outputTokens: number } {
+  const usage = parseObject(raw);
+  return {
+    inputTokens: asNumber(usage.inputTokens, asNumber(usage.input, 0)),
+    cachedInputTokens: asNumber(usage.cachedInputTokens, asNumber(parseObject(usage.cache).read, 0)),
+    outputTokens: asNumber(usage.outputTokens, asNumber(usage.output, 0)),
+  };
+}
+
+function toRemoteExecutionError(code: string, message: string, detail?: string | null): AdapterExecutionResult {
+  return {
+    exitCode: 1,
+    signal: null,
+    timedOut: false,
+    errorCode: code,
+    errorMessage: message,
+    errorMeta: detail ? { detail } : undefined,
+    sessionParams: null,
+    sessionDisplayId: null,
+    summary: null,
+  };
+}
+
+async function executeRemoteServer(
+  ctx: AdapterExecutionContext,
+  config: OpencodeFullRemoteServerRuntimeConfig,
+): Promise<AdapterExecutionResult> {
+  const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
+  if (target.status !== "resolved") {
+    return toRemoteExecutionError(target.code, target.message);
+  }
+
+  const authCheck = validateResolvedRemoteAuth(config.remoteServer.auth);
+  if (!authCheck.ok) {
+    return toRemoteExecutionError("REMOTE_AUTH_UNRESOLVED", authCheck.reason);
+  }
+
+  try {
+    await ensureRemoteServerOpenCodeModelConfiguredAndAvailable(config);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return toRemoteExecutionError(
+      /authentication/i.test(message) ? "REMOTE_AUTH_REJECTED" : "REMOTE_MODEL_INVALID",
+      message,
+    );
+  }
+
+  const promptTemplate = asString(
+    config.promptTemplate,
+    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+  );
+  const prompt = joinPromptSections([
+    renderTemplate(promptTemplate, { agent: ctx.agent, context: ctx.context, run: { id: ctx.runId } }),
+    renderPaperclipWakePrompt(ctx.context.paperclipWake),
+  ]);
+
+  const resumeDecision = getRemoteSessionResumeDecision({
+    companyId: ctx.agent.companyId,
+    agentId: ctx.agent.id,
+    config,
+    sessionParams: ctx.runtime.sessionParams,
+  });
+  const parsedRuntimeSession = parseObject(ctx.runtime.sessionParams);
+  const resumeSessionId = resumeDecision.shouldResume
+    ? asString(parsedRuntimeSession.remoteSessionId, "").trim() || ctx.runtime.sessionId || null
+    : null;
+
+  if (!resumeDecision.shouldResume && ctx.runtime.sessionParams) {
+    await ctx.onLog(
+      "stdout",
+      `[paperclip] Remote session resume refused; starting fresh because ${resumeDecision.reason ?? "resume eligibility changed"}.\n`,
+    );
+  }
+
+  if (ctx.onMeta) {
+    await ctx.onMeta({
+      adapterType: "opencode_full",
+      command: "remote_server",
+      cwd: config.remoteServer.baseUrl,
+      commandArgs: ["POST", "/sessions/execute"],
+      commandNotes: [
+        `Execution mode: ${config.executionMode}`,
+        `Remote base URL: ${config.remoteServer.baseUrl}`,
+        `Remote target mode: ${target.targetMode}`,
+        `Resolved target identity: ${target.resolvedTargetIdentity}`,
+        resumeSessionId ? `Resume requested for remote session ${resumeSessionId}` : "Fresh remote session requested",
+      ],
+      env: {},
+      prompt,
+      promptMetrics: { promptChars: prompt.length },
+      context: ctx.context,
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutSec = asNumber(config.timeoutSec, 120);
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutSec) * 1000);
+
+  try {
+    const response = await fetch(joinRemoteUrl(config.remoteServer.baseUrl, "/sessions/execute"), {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...buildRemoteAuthHeaders(authCheck.auth),
+      },
+      body: JSON.stringify({
+        runId: ctx.runId,
+        companyId: ctx.agent.companyId,
+        agentId: ctx.agent.id,
+        model: config.model,
+        variant: config.variant,
+        prompt,
+        sessionId: resumeSessionId,
+        target: {
+          mode: target.targetMode,
+          resolvedTargetIdentity: target.resolvedTargetIdentity,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    const rawText = await response.text();
+    let payload: unknown = null;
+    try {
+      payload = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      payload = null;
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return toRemoteExecutionError("REMOTE_AUTH_REJECTED", `Remote server rejected authentication (${response.status}).`, rawText || null);
+    }
+    if (!response.ok) {
+      return toRemoteExecutionError(
+        response.status >= 500 ? "REMOTE_SERVER_ERROR" : "REMOTE_EXECUTION_FAILED",
+        `Remote execution failed (${response.status}).`,
+        rawText || null,
+      );
+    }
+
+    const body = parseObject(payload);
+    const remoteSessionId = asString(body.remoteSessionId, "").trim() || asString(body.sessionId, "").trim();
+    if (!remoteSessionId) {
+      return toRemoteExecutionError("REMOTE_SESSION_MISSING", "Remote execution response did not include a session id.");
+    }
+
+    const summary =
+      asString(body.summary, "").trim() ||
+      asString(body.outputText, "").trim() ||
+      asString(body.result, "").trim() ||
+      null;
+    const usage = normalizeRemoteUsage(body.usage);
+    const sessionParams = createRemoteSessionParams({
+      companyId: ctx.agent.companyId,
+      agentId: ctx.agent.id,
+      config,
+      remoteSessionId,
+      canonicalWorkspaceId: null,
+      canonicalWorkspaceCwd: null,
+      serverScope: "unknown",
+    });
+
+    return {
+      exitCode: asNumber(body.exitCode, 0),
+      signal: null,
+      timedOut: false,
+      errorMessage: asString(body.errorMessage, "").trim() || null,
+      usage,
+      sessionId: remoteSessionId,
+      sessionParams,
+      sessionDisplayId: remoteSessionId,
+      provider: parseModelProvider(config.model),
+      biller: resolveOpenCodeBiller({}, parseModelProvider(config.model)),
+      model: config.model,
+      billingType: "unknown",
+      costUsd: asNumber(body.costUsd, 0),
+      resultJson: isPlainObject(body.resultJson)
+        ? body.resultJson
+        : { response: payload, requestedTarget: target.resolvedTargetIdentity },
+      summary,
+    };
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      return {
+        exitCode: 1,
+        signal: null,
+        timedOut: true,
+        errorCode: "REMOTE_TIMEOUT",
+        errorMessage: `Remote execution timed out after ${timeoutSec}s.`,
+        sessionParams: null,
+        sessionDisplayId: null,
+        summary: null,
+      };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return toRemoteExecutionError("REMOTE_UNREACHABLE", `Remote execution could not reach ${config.remoteServer.baseUrl}.`, message);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function resolveLocalExecutionMetadata(context: Record<string, unknown>) {
@@ -414,3 +633,5 @@ export async function executeLocalCli(
     await preparedRuntimeConfig.cleanup();
   }
 }
+
+export { executeRemoteServer };

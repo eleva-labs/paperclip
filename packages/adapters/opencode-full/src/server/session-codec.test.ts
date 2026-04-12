@@ -3,6 +3,7 @@ import {
   canResumeRemoteSession,
   createRemoteSessionParams,
   getConfigFingerprint,
+  getRemoteSessionResumeDecision,
   sessionCodec,
 } from "./session-codec.js";
 
@@ -107,6 +108,32 @@ describe("opencodeFull session codec and isolation", () => {
         },
       },
       sessionParams: session,
-    })).toEqual({ ok: false, reason: "TARGET_MODE_DEFERRED" });
+    })).toEqual({ ok: false, reason: "TARGET_MODE_REQUIRES_SERVER_ISOLATION_PROOF" });
+  });
+
+  it("returns a resume decision helper that forces fresh remote sessions on gating changes", () => {
+    const session = createRemoteSessionParams({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: baseConfig,
+      remoteSessionId: "remote-session-1",
+    });
+
+    expect(getRemoteSessionResumeDecision({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: baseConfig,
+      sessionParams: session,
+    })).toEqual({ shouldResume: true, reason: null });
+
+    expect(getRemoteSessionResumeDecision({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: {
+        ...baseConfig,
+        remoteServer: { ...baseConfig.remoteServer, auth: { mode: "bearer", token: "different-token" } },
+      },
+      sessionParams: session,
+    })).toEqual({ shouldResume: false, reason: "config_fingerprint_mismatch" });
   });
 });

@@ -11,10 +11,9 @@ import type { ZodIssue } from "zod";
 import { opencodeFullRuntimeConfigSchema } from "./config-schema.js";
 import { sessionCodec as baseSessionCodec } from "./session-codec.js";
 import { getOpencodeFullConfigSchema } from "./config-schema.js";
-import { deserializeLocalCliSessionParams, executeLocalCli, serializeLocalCliSessionParams } from "./execute.js";
+import { deserializeLocalCliSessionParams, executeLocalCli, executeRemoteServer, serializeLocalCliSessionParams } from "./execute.js";
 import { listLocalCliOpenCodeModels } from "./models.js";
-import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
-import { testLocalCliEnvironment } from "./test.js";
+import { testLocalCliEnvironment, testRemoteServerEnvironment } from "./test.js";
 
 export const sessionCodec: AdapterSessionCodec = {
   deserialize(raw: unknown) {
@@ -87,71 +86,7 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
   }
 
   if (mode === "remote_server") {
-    const target = resolveRemoteTargetIdentity(parsed.data.remoteServer.projectTarget);
-
-    if (target.status === "resolved") {
-      return {
-        adapterType: "opencode_full",
-        status: "pass",
-        testedAt,
-        checks: [
-          {
-            code: "opencode_full_config_valid",
-            level: "info",
-            message: "Config-only environment check passed for executionMode=remote_server.",
-            detail: "Cycle 1.1 intentionally keeps testEnvironment() config-only and defers runtime validation.",
-          },
-          {
-            code: "opencode_runtime_target_resolved",
-            level: "info",
-            message: `Remote target mode ${target.targetMode} is the only Cycle 1.1 target that resolves cleanly in config-only checks.`,
-            detail: `resolvedTargetIdentity=${target.resolvedTargetIdentity}`,
-          },
-        ],
-      };
-    }
-
-    if (target.status === "conditional") {
-      return {
-        adapterType: "opencode_full",
-        status: "warn",
-        testedAt,
-        checks: [
-          {
-            code: "opencode_full_config_valid",
-            level: "info",
-            message: "Remote server config parsed successfully.",
-            detail: "Cycle 1.1 intentionally keeps testEnvironment() config-only and does not claim workspace-aware target readiness.",
-          },
-          {
-            code: "opencode_runtime_target_unsupported",
-            level: "warn",
-            message: target.message,
-            detail: `Selected target mode ${target.targetMode} remains deferred in Cycle 1.1 and cannot be reported as ready by config-only checks.`,
-          },
-        ],
-      };
-    }
-
-    return {
-      adapterType: "opencode_full",
-      status: "fail",
-      testedAt,
-      checks: [
-        {
-          code: "opencode_full_config_valid",
-          level: "info",
-          message: "Remote server config parsed successfully.",
-          detail: "Cycle 1.1 intentionally keeps testEnvironment() config-only and does not hide unsupported target modes.",
-        },
-        {
-          code: "opencode_runtime_target_unsupported",
-          level: "error",
-          message: target.message,
-          detail: `Selected target mode ${target.targetMode} is unsupported in Cycle 1.1 and should not be presented as a passing environment check.`,
-        },
-      ],
-    };
+    return testRemoteServerEnvironment(ctx, parsed.data);
   }
 
   return {
@@ -173,6 +108,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const parsed = opencodeFullRuntimeConfigSchema.parse(ctx.config);
   if (parsed.executionMode === "local_cli") {
     return executeLocalCli(ctx, parsed);
+  }
+  if (parsed.executionMode === "remote_server") {
+    return executeRemoteServer(ctx, parsed);
   }
   const suffix = parsed.executionMode === "local_sdk"
     ? "local_sdk is explicitly deferred and is not wired as an executable runtime path."
@@ -219,6 +157,7 @@ export {
 export {
   deserializeLocalCliSessionParams,
   executeLocalCli,
+  executeRemoteServer,
   isOpenCodeUnknownSessionError,
   parseOpenCodeJsonl,
   serializeLocalCliSessionParams,
@@ -236,10 +175,11 @@ export {
   createRemoteSessionOwnership,
   createRemoteSessionParams,
   getConfigFingerprint,
+  getRemoteSessionResumeDecision,
   opencodeFullRemoteSessionParamsSchema,
   opencodeFullSessionOwnershipSchema,
   type OpencodeFullRemoteSessionParams,
   type OpencodeFullSessionOwnership,
 } from "./session-codec.js";
 export { prepareLocalCliRuntimeConfig, resetLocalCliOpenCodeModelsCacheForTests } from "./models.js";
-export { testLocalCliEnvironment } from "./test.js";
+export { testLocalCliEnvironment, testRemoteServerEnvironment } from "./test.js";
