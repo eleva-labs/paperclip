@@ -1,6 +1,5 @@
 import { z } from "@paperclipai/plugin-sdk";
 import {
-  opencodeLegacyOutOfScopeEntitySchema,
   opencodeProjectSyncPolicySchema,
   opencodeSelectedAgentSchema,
   opencodeProjectConflictSchema,
@@ -33,7 +32,6 @@ export const opencodeProjectSyncStateSchema = z.object({
   syncPolicy: opencodeProjectSyncPolicySchema,
   selectedAgents: z.array(opencodeSelectedAgentSchema),
   importedAgents: z.array(opencodeProjectSyncManifestAgentSchema),
-  legacyOutOfScopeEntities: z.array(opencodeLegacyOutOfScopeEntitySchema),
   warnings: z.array(z.string()),
   conflicts: z.array(opencodeProjectConflictSchema),
 });

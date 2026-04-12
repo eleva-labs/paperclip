@@ -1,19 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
-import type { Agent, Company, Project } from "@paperclipai/plugin-sdk";
+import type { Company, Project } from "@paperclipai/plugin-sdk";
 import manifest, {
   OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
-  OPENCODE_PROJECT_EXPORT_ACTION_KEY,
-  OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
-  OPENCODE_PROJECT_SYNC_STATE_DATA_KEY,
-  OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID,
-  OPENCODE_PROJECT_SYNC_SIDEBAR_ITEM_ID,
-  OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY,
-  OPENCODE_PROJECT_SYNC_TOOLBAR_BUTTON_ID,
+  OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
 } from "../src/manifest.js";
 import plugin from "../src/plugin.js";
 import {
@@ -41,7 +35,6 @@ function writeFile(repoRoot: string, repoRelPath: string, content: string) {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -149,224 +142,156 @@ function makeProject(repoRoot: string): Project {
   };
 }
 
-function makeManagedAgent(repoRoot: string): Agent {
-  return {
-    id: "44444444-4444-4444-8444-444444444444",
-    companyId,
-    name: "Researcher",
-    urlKey: "researcher",
-    role: "general",
-    title: "Lead researcher",
-    icon: null,
-    status: "idle",
-    reportsTo: null,
-    capabilities: null,
-    metadata: {
-      syncManaged: true,
-      sourceSystem: "opencode_project_repo",
-      sourceOfTruth: "repo_first",
-      projectId,
-      workspaceId,
-      repoRoot,
-      repoRelPath: ".opencode/agents/researcher.md",
-      canonicalLocator: `${repoRoot}::.opencode/agents/researcher.md`,
-      externalAgentKey: "researcher",
-      externalAgentName: "Researcher",
-      folderPath: null,
-      hierarchyMode: "metadata_only",
-      reportsToExternalKey: null,
-      desiredSkillKeys: ["research"],
-      lastImportedFingerprint: "fp-agent-1",
-      lastImportedAt: "2026-04-11T12:00:00.000Z",
-      lastExportedFingerprint: null,
-      lastExportedAt: null,
-    },
-    adapterType: "opencode_project_local",
-    adapterConfig: { promptTemplate: "# Researcher\n", allowProjectConfig: true },
-    runtimeConfig: {},
-    budgetMonthlyCents: 0,
-    spentMonthlyCents: 0,
-    pauseReason: null,
-    pausedAt: null,
-    permissions: { canCreateAgents: false },
-    lastHeartbeatAt: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-}
-
-describe("opencode project sync scaffold", () => {
-  it("registers foundation data/actions and declares project ui surfaces", async () => {
+describe("opencode project sync plugin cycle 2.1", () => {
+  it("returns an import plan without mutating host agents", async () => {
     const repoRoot = makeTempRepo();
-    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
-    await plugin.definition.setup(harness.ctx);
-    harness.seed({ companies: [company], projects: [makeProject(repoRoot)] });
-
-    const hostContract = await harness.getData<{
-      transport: string;
-      endpoints: { createAgent: string; createCompanySkill: string };
-    }>(OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY);
-
-    expect(hostContract.transport).toBe("paperclip_rest_api_v1");
-    expect(hostContract.endpoints.createAgent).toBe("/companies/:companyId/agents");
-    expect(hostContract.endpoints.createCompanySkill).toBe("/companies/:companyId/skills");
-
-    const stateData = await harness.getData<{ workspace: { workspaceId: string } }>(
-      OPENCODE_PROJECT_SYNC_STATE_DATA_KEY,
-      { companyId, projectId },
-    );
-    expect(stateData.workspace.workspaceId).toBe(workspaceId);
-
-    const bootstrap = await harness.performAction<{ ok: boolean; workspaceId: string }>(
-      OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
-      { companyId, projectId },
-    );
-    expect(bootstrap.ok).toBe(true);
-    expect(bootstrap.workspaceId).toBe(workspaceId);
-
-    expect(manifest.ui?.slots?.map((slot: { id: string }) => slot.id)).toEqual([
-      OPENCODE_PROJECT_SYNC_TOOLBAR_BUTTON_ID,
-      OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID,
-      OPENCODE_PROJECT_SYNC_SIDEBAR_ITEM_ID,
-    ]);
-  });
-
-  it("logs import mutations, runtime-test state, and guarded export refusals", async () => {
-    const repoRoot = makeTempRepo();
-    writeFile(repoRoot, "AGENTS.md", "# Repository Guide\n");
-    writeFile(repoRoot, ".opencode/skills/research/SKILL.md", "# Research\n");
-    writeFile(
-      repoRoot,
-      ".opencode/agents/researcher.md",
-      "---\nname: Researcher\ndesiredSkills:\n  - research\n---\n# Researcher\n",
-    );
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      const method = (init?.method ?? "GET").toUpperCase();
-
-      if (url.endsWith(`/companies/${companyId}/skills`) && method === "GET") {
-        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith(`/companies/${companyId}/skills`) && method === "POST") {
-        return new Response(JSON.stringify({ id: "skill-created-1" }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith(`/companies/${companyId}/skills/skill-created-1`) && method === "GET") {
-        return new Response(JSON.stringify({ id: "skill-created-1", key: "research", slug: "research", name: "Research", markdown: "# Research\n" }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith(`/companies/${companyId}/skills/skill-created-1/files`) && method === "PATCH") {
-        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith(`/companies/${companyId}/agents`) && method === "POST") {
-        return new Response(JSON.stringify({ id: "agent-created-1" }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.endsWith(`/agents/agent-created-1`) && method === "PATCH") {
-        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      if (url.includes(`/agents/agent-created-1/skills/sync`) && method === "POST") {
-        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
-      }
-      throw new Error(`Unexpected fetch: ${method} ${url}`);
-    });
+    writeFile(repoRoot, ".git/HEAD", "ref: refs/heads/main\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "---\nname: Researcher\nrole: Lead researcher\n---\n# Researcher\n");
 
     const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
     await plugin.definition.setup(harness.ctx);
     harness.seed({ companies: [company], projects: [makeProject(repoRoot)] });
 
-    const syncResult = await harness.performAction<{ ok: true; importedAgentCount: number; importedSkillCount: number }>(
-      OPENCODE_PROJECT_SYNC_ACTION_KEY,
-      { companyId, projectId, mode: "import", dryRun: false },
-    );
+    await harness.performAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, { companyId, projectId });
+    const beforeAgents = await harness.ctx.agents.list({ companyId });
 
-    expect(syncResult.ok).toBe(true);
-    expect(syncResult.importedAgentCount).toBe(1);
-    expect(syncResult.importedSkillCount).toBe(2);
-    expect(harness.activity).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        message: "OpenCode import sync completed",
-        entityType: "project",
-        entityId: projectId,
-        metadata: expect.objectContaining({
-          pluginId: manifest.id,
-          workspaceId,
-          importedAgentCount: 1,
-        }),
-      }),
-    ]));
-
-    const runtimeResult = await harness.performAction<{ ok: boolean; message: string }>(
-      OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY,
-      { companyId, projectId, agentId: "agent-created-1" },
-    );
-    expect(runtimeResult.ok).toBe(false);
-    expect(runtimeResult.message).toContain("not wired through this plugin action yet");
-    expect(harness.getState({
-      scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND,
-      scopeId: workspaceId,
-      namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE,
-      stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY,
-    })).toEqual(expect.objectContaining({
-      lastRuntimeTestAt: expect.any(String),
-      lastRuntimeTestResult: expect.objectContaining({ ok: false }),
-    }));
-
-    writeFile(repoRoot, ".opencode/skills/research/notes.md", "drift\n");
-    await expect(harness.performAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, {
+    const plan = await harness.performAction<any>(OPENCODE_PROJECT_SYNC_ACTION_KEY, {
       companyId,
       projectId,
-      exportAgents: true,
-      exportSkills: true,
-    })).rejects.toThrow(/OpenCode export blocked/i);
+      mode: "import",
+      dryRun: false,
+      selectedAgentKeys: ["researcher"],
+    });
 
-    expect(harness.activity).toEqual(expect.arrayContaining([
+    expect(plan.ok).toBe(true);
+    expect(plan.skillUpserts).toEqual([]);
+    expect(plan.agentUpserts).toEqual([
       expect.objectContaining({
-        message: expect.stringContaining("OpenCode export blocked:"),
-        entityType: "project",
-        entityId: projectId,
-        metadata: expect.objectContaining({
-          pluginId: manifest.id,
-          workspaceId,
-          conflicts: expect.arrayContaining([
-            expect.objectContaining({ code: "repo_changed_since_last_import" }),
-          ]),
+        operation: "create",
+        externalAgentKey: "researcher",
+        matchBasis: "new_agent",
+        payload: expect.objectContaining({
+          reportsTo: null,
+          metadata: expect.objectContaining({
+            importRole: "facade_entrypoint",
+            topLevelAgent: true,
+            repoRelPath: ".opencode/agents/researcher.md",
+            workspaceId,
+            projectId,
+          }),
         }),
       }),
-    ]));
-
-    expect(fetchMock).toHaveBeenCalled();
+    ]);
+    expect(await harness.ctx.agents.list({ companyId })).toEqual(beforeAgents);
   });
 
-  it("rejects malformed persisted sync state before mutating", async () => {
+  it("finalize persists only selected facade manifests and preserves the selected set", async () => {
     const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".git/HEAD", "ref: refs/heads/main\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Researcher\n");
+    writeFile(repoRoot, ".opencode/agents/writer.md", "# Writer\n");
+
     const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
     await plugin.definition.setup(harness.ctx);
     harness.seed({
       companies: [company],
       projects: [makeProject(repoRoot)],
-      agents: [makeManagedAgent(repoRoot)],
-    });
-    await harness.ctx.state.set({
-      scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND,
-      scopeId: workspaceId,
-      namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE,
-      stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY,
-    }, {
-      projectId,
-      workspaceId,
-      sourceOfTruth: "repo_first",
-      canonicalRepoRoot: repoRoot,
-      manifestVersion: 999,
-      importedAgents: [],
-      importedSkills: [],
-      warnings: [],
-      conflicts: [],
     });
 
-    await expect(harness.performAction(OPENCODE_PROJECT_SYNC_ACTION_KEY, {
+    await harness.performAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, { companyId, projectId });
+    const plan = await harness.performAction<any>(OPENCODE_PROJECT_SYNC_ACTION_KEY, {
       companyId,
       projectId,
       mode: "import",
       dryRun: false,
-    })).rejects.toThrow(/stored OpenCode project sync state is invalid/i);
+      selectedAgentKeys: ["researcher"],
+    });
+
+    const finalized = await harness.performAction<any>(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, {
+      companyId,
+      projectId,
+      workspaceId: plan.workspaceId,
+      importedAt: "2026-04-11T12:34:56.000Z",
+      lastScanFingerprint: plan.lastScanFingerprint,
+      selectedAgentKeys: ["researcher"],
+      warnings: plan.warnings,
+      agentUpserts: plan.agentUpserts.map((entry: any) => ({
+        operation: entry.operation,
+        paperclipAgentId: entry.paperclipAgentId,
+        externalAgentKey: entry.externalAgentKey,
+        repoRelPath: entry.repoRelPath,
+        fingerprint: entry.fingerprint,
+      })),
+      appliedAgents: [{ externalAgentKey: "researcher", paperclipAgentId: "55555555-5555-4555-8555-555555555555" }],
+    });
+
+    expect(finalized.ok).toBe(true);
+    expect(finalized.importedAgentCount).toBe(1);
+    expect(finalized.importedSkillCount).toBe(0);
+
+    const state = harness.getState({
+      scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND,
+      scopeId: workspaceId,
+      namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE,
+      stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY,
+    }) as any;
+
+    expect(state.selectedAgents).toEqual([
+      expect.objectContaining({ externalAgentKey: "researcher", repoRelPath: ".opencode/agents/researcher.md" }),
+    ]);
+    expect(state.importedAgents).toEqual([
+      expect.objectContaining({
+        paperclipAgentId: "55555555-5555-4555-8555-555555555555",
+        externalAgentKey: "researcher",
+        repoRelPath: ".opencode/agents/researcher.md",
+      }),
+    ]);
+    expect(state.legacyOutOfScopeEntities).toBeUndefined();
+  });
+
+  it("rejects finalize payloads that include unselected agents", async () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".git/HEAD", "ref: refs/heads/main\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Researcher\n");
+    writeFile(repoRoot, ".opencode/agents/writer.md", "# Writer\n");
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      companies: [company],
+      projects: [makeProject(repoRoot)],
+    });
+
+    await harness.performAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, { companyId, projectId });
+
+    await expect(harness.performAction<any>(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, {
+      companyId,
+      projectId,
+      workspaceId,
+      importedAt: "2026-04-11T12:34:56.000Z",
+      lastScanFingerprint: "scan-1",
+      selectedAgentKeys: ["researcher"],
+      warnings: [],
+      agentUpserts: [
+        {
+          operation: "create",
+          paperclipAgentId: null,
+          externalAgentKey: "researcher",
+          repoRelPath: ".opencode/agents/researcher.md",
+          fingerprint: "fp-researcher",
+        },
+        {
+          operation: "create",
+          paperclipAgentId: null,
+          externalAgentKey: "writer",
+          repoRelPath: ".opencode/agents/writer.md",
+          fingerprint: "fp-writer",
+        },
+      ],
+      appliedAgents: [
+        { externalAgentKey: "researcher", paperclipAgentId: "55555555-5555-4555-8555-555555555555" },
+        { externalAgentKey: "writer", paperclipAgentId: "66666666-6666-4666-8666-666666666666" },
+      ],
+    })).rejects.toThrow(/outside the selected eligible top-level set/i);
   });
 });

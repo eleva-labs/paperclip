@@ -153,6 +153,7 @@ export const opencodeProjectPlannedAgentUpsertSchema = z.object({
   externalAgentKey: z.string().min(1),
   repoRelPath: z.string().min(1),
   fingerprint: z.string().min(1),
+  matchBasis: z.enum(["new_agent", "manifest_link", "metadata_link"]),
   payload: z.object({
     name: z.string().min(1),
     title: z.string().min(1).nullable(),

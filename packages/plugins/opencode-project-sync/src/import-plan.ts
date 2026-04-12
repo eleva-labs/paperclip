@@ -23,6 +23,7 @@ export type PlannedAgentUpsert = {
   externalAgentKey: string;
   repoRelPath: string;
   fingerprint: string;
+  matchBasis: "new_agent" | "manifest_link" | "metadata_link";
   payload: {
     name: string;
     title: string | null;
@@ -44,6 +45,17 @@ export type ImportPlan = {
 type PriorImportedAgent = {
   paperclipAgentId: string;
   externalAgentKey: string;
+  repoRelPath: string;
+};
+
+type ManagedAgentProvenance = {
+  projectId: string;
+  workspaceId: string;
+  repoRelPath: string;
+  externalAgentKey: string;
+  syncPolicyMode: string;
+  sourceSystem: string;
+  syncManaged: boolean;
 };
 
 type BuildImportPlanInput = {
@@ -79,6 +91,27 @@ function parseImportedAgentMetadata(metadata: Record<string, unknown> | null | u
   return parsed.success ? parsed.data : null;
 }
 
+function parseManagedAgentProvenance(metadata: Record<string, unknown> | null | undefined): ManagedAgentProvenance | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const record = metadata as Record<string, unknown>;
+  if (record.syncManaged !== true) return null;
+  if (typeof record.projectId !== "string") return null;
+  if (typeof record.workspaceId !== "string") return null;
+  if (typeof record.repoRelPath !== "string") return null;
+  if (typeof record.externalAgentKey !== "string") return null;
+  if (typeof record.syncPolicyMode !== "string") return null;
+  if (typeof record.sourceSystem !== "string") return null;
+  return {
+    projectId: record.projectId,
+    workspaceId: record.workspaceId,
+    repoRelPath: record.repoRelPath,
+    externalAgentKey: record.externalAgentKey,
+    syncPolicyMode: record.syncPolicyMode,
+    sourceSystem: record.sourceSystem,
+    syncManaged: true,
+  };
+}
+
 function createConflictsFromDiscoveryWarnings(warnings: DiscoveryWarning[]): OpencodeProjectConflict[] {
   return warnings
     .filter(
@@ -110,12 +143,15 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
     }),
   );
   const existingAgentsById = new Map(input.existingAgents.map((agent) => [agent.id, agent]));
-  const existingManagedAgents = new Map<string, MinimalPaperclipAgent>();
+  const existingManagedAgentsByProvenance = new Map<string, MinimalPaperclipAgent[]>();
   for (const agent of input.existingAgents) {
-    const metadata = parseImportedAgentMetadata(agent.metadata);
-    if (!metadata) continue;
-    if (metadata.projectId !== input.projectId || metadata.workspaceId !== input.workspaceId) continue;
-    existingManagedAgents.set(metadata.externalAgentKey, agent);
+    const provenance = parseManagedAgentProvenance(agent.metadata);
+    if (!provenance) continue;
+    if (provenance.projectId !== input.projectId || provenance.workspaceId !== input.workspaceId) continue;
+    const key = `${provenance.repoRelPath}::${provenance.externalAgentKey}`;
+    const matches = existingManagedAgentsByProvenance.get(key) ?? [];
+    matches.push(agent);
+    existingManagedAgentsByProvenance.set(key, matches);
   }
 
   const eligibleAgentsByKey = new Map(
@@ -139,8 +175,56 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
     const locator = toLocator(input.repoRoot, discoveredAgent.repoRelPath);
     const priorManifest = priorAgentManifest.get(discoveredAgent.externalAgentKey) ?? null;
     const manifestMatch = priorManifest?.paperclipAgentId ? existingAgentsById.get(priorManifest.paperclipAgentId) ?? null : null;
-    const managedMatch = existingManagedAgents.get(discoveredAgent.externalAgentKey) ?? null;
-    const existing = manifestMatch ?? managedMatch ?? null;
+    const provenanceMatches = existingManagedAgentsByProvenance.get(
+      `${discoveredAgent.repoRelPath}::${discoveredAgent.externalAgentKey}`,
+    ) ?? [];
+
+    if (provenanceMatches.length > 1) {
+      conflicts.push({
+        code: "paperclip_entity_drift",
+        message: `Multiple Paperclip agents claim sync-managed provenance for '${discoveredAgent.externalAgentKey}'. Resolve the duplicate managed records before importing again.`,
+        repoRelPath: discoveredAgent.repoRelPath,
+        entityType: "agent",
+        entityKey: discoveredAgent.externalAgentKey,
+      });
+      continue;
+    }
+
+    if (manifestMatch) {
+      const manifestProvenance = parseManagedAgentProvenance(manifestMatch.metadata);
+      const manifestMatchesSelection = Boolean(
+        manifestProvenance
+        && manifestProvenance.projectId === input.projectId
+        && manifestProvenance.workspaceId === input.workspaceId
+        && manifestProvenance.repoRelPath === discoveredAgent.repoRelPath
+        && manifestProvenance.externalAgentKey === discoveredAgent.externalAgentKey
+        && manifestProvenance.syncPolicyMode === "top_level_agents_only"
+        && manifestProvenance.sourceSystem === "opencode_project_repo",
+      );
+      if (!manifestMatchesSelection) {
+        conflicts.push({
+          code: "paperclip_entity_drift",
+          message: `Manifest-linked Paperclip agent '${manifestMatch.id}' no longer matches the expected top-level sync provenance for '${discoveredAgent.externalAgentKey}'.`,
+          repoRelPath: discoveredAgent.repoRelPath,
+          entityType: "agent",
+          entityKey: manifestMatch.id,
+        });
+        continue;
+      }
+      if (provenanceMatches.length === 1 && provenanceMatches[0]?.id !== manifestMatch.id) {
+        conflicts.push({
+          code: "paperclip_entity_drift",
+          message: `Manifest-linked agent '${manifestMatch.id}' and metadata-linked agent '${provenanceMatches[0].id}' disagree for '${discoveredAgent.externalAgentKey}'.`,
+          repoRelPath: discoveredAgent.repoRelPath,
+          entityType: "agent",
+          entityKey: discoveredAgent.externalAgentKey,
+        });
+        continue;
+      }
+    }
+
+    const metadataMatch = manifestMatch ? null : provenanceMatches[0] ?? null;
+    const existing = manifestMatch ?? metadataMatch ?? null;
 
     const existingMetadata = existing ? parseImportedAgentMetadata(existing.metadata) : null;
     const metadata: ImportedOpencodeAgentMetadata = {
@@ -169,6 +253,7 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
       externalAgentKey: discoveredAgent.externalAgentKey,
       repoRelPath: discoveredAgent.repoRelPath,
       fingerprint: discoveredAgent.fingerprint,
+      matchBasis: manifestMatch ? "manifest_link" : metadataMatch ? "metadata_link" : "new_agent",
       payload: {
         name: discoveredAgent.displayName || toTitle(discoveredAgent.externalAgentKey),
         title: discoveredAgent.role ?? null,

@@ -35,7 +35,6 @@ function makeState(): OpencodeProjectSyncState {
       lastExportedFingerprint: null,
       lastExportedAt: null,
     }],
-    legacyOutOfScopeEntities: [],
     warnings: [],
     conflicts: [],
   };

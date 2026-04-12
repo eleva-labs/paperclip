@@ -193,7 +193,6 @@ async function readOrCreateSyncState(
     },
     selectedAgents: [],
     importedAgents: [],
-    legacyOutOfScopeEntities: [],
     warnings: [],
     conflicts: [],
   };
@@ -294,6 +293,57 @@ function reconcileSelectedAgents(
   });
 }
 
+function selectedImportedAgentsFromFinalizeInput(
+  input: ReturnType<typeof opencodeProjectFinalizeSyncInputSchema.parse>,
+  resolvedWorkspace: ResolvedCanonicalWorkspace,
+  discovery: DiscoveredOpencodeProjectFiles,
+  previousState: OpencodeProjectSyncState,
+): OpencodeProjectSyncState["importedAgents"] {
+  const selectedAgents = reconcileSelectedAgents(input.selectedAgentKeys, discovery, input.importedAt);
+  const selectedByKey = new Map<string, OpencodeProjectSyncState["selectedAgents"][number]>(
+    selectedAgents.map((agent: OpencodeProjectSyncState["selectedAgents"][number]) => [agent.externalAgentKey, agent] as const),
+  );
+  const eligibleByKey = new Map<string, DiscoveredOpencodeProjectFiles["eligibleAgents"][number]>(
+    discovery.eligibleAgents.map((agent: DiscoveredOpencodeProjectFiles["eligibleAgents"][number]) => [agent.externalAgentKey, agent] as const),
+  );
+  const agentIdByExternalKey = new Map<string, string>(
+    input.appliedAgents.map((entry: OpencodeProjectAppliedAgentResult) => [entry.externalAgentKey, entry.paperclipAgentId] as const),
+  );
+
+  return input.agentUpserts.flatMap((entry: typeof input.agentUpserts[number]) => {
+    const selected = selectedByKey.get(entry.externalAgentKey);
+    const eligible = eligibleByKey.get(entry.externalAgentKey);
+    if (!selected || !eligible) {
+      return [];
+    }
+
+    if (selected.repoRelPath !== entry.repoRelPath || selected.fingerprint !== entry.fingerprint) {
+      return [];
+    }
+
+    const paperclipAgentId = agentIdByExternalKey.get(entry.externalAgentKey);
+    if (!paperclipAgentId) {
+      return [];
+    }
+
+    const previousImported = previousState.importedAgents.find(
+      (agent: OpencodeProjectSyncManifestAgent) => agent.externalAgentKey === entry.externalAgentKey,
+    );
+
+    return [{
+      paperclipAgentId,
+      externalAgentKey: entry.externalAgentKey,
+      repoRelPath: entry.repoRelPath,
+      fingerprint: entry.fingerprint,
+      canonicalLocator: `${resolvedWorkspace.cwd}::${entry.repoRelPath}`,
+      externalAgentName: eligible.displayName,
+      lastImportedAt: input.importedAt,
+      lastExportedFingerprint: previousImported?.lastExportedFingerprint ?? null,
+      lastExportedAt: previousImported?.lastExportedAt ?? null,
+    }];
+  });
+}
+
 async function bootstrapProject(
   ctx: PluginContext,
   input: { companyId: string; projectId: string },
@@ -379,6 +429,7 @@ async function syncProject(
       lastScanFingerprint: discovery.lastScanFingerprint,
       warnings: plan.warnings,
       conflicts: plan.conflicts,
+      selectedAgents: reconcileSelectedAgents(input.selectedAgentKeys, discovery, importedAt),
     });
     await ctx.state.set(getStateScope(resolvedWorkspace.workspaceId), nextState);
     await ctx.state.set(getPreviewScope(resolvedWorkspace.workspaceId), previewFromDiscovery(discovery));
@@ -425,13 +476,41 @@ async function finalizeSyncProject(
   }
 
   const previousState = await readOrCreateSyncState(ctx, resolvedWorkspace);
-  const agentIdByExternalKey = new Map(input.appliedAgents.map((entry: OpencodeProjectAppliedAgentResult) => [entry.externalAgentKey, entry.paperclipAgentId] as const));
   const discovery = discoverOpencodeProjectFiles({ repoRoot: resolvedWorkspace.cwd });
-  const eligibleAgentsByKey = new Map(
-    discovery.eligibleAgents.map((agent) => [agent.externalAgentKey, agent] as const),
+  const selectedAgents = reconcileSelectedAgents(input.selectedAgentKeys, discovery, input.importedAt);
+  const selectedByKey = new Set(selectedAgents.map((agent: OpencodeProjectSyncState["selectedAgents"][number]) => agent.externalAgentKey));
+  const eligibleByKey = new Map<string, DiscoveredOpencodeProjectFiles["eligibleAgents"][number]>(
+    discovery.eligibleAgents.map((agent: DiscoveredOpencodeProjectFiles["eligibleAgents"][number]) => [agent.externalAgentKey, agent] as const),
   );
+  const agentIdByExternalKey = new Map(input.appliedAgents.map((entry: OpencodeProjectAppliedAgentResult) => [entry.externalAgentKey, entry.paperclipAgentId] as const));
 
   for (const upsert of input.agentUpserts) {
+    const selected = selectedByKey.has(upsert.externalAgentKey);
+    if (!selected) {
+      await logFailureAndThrow(ctx, {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        message: `Finalize payload included agent '${upsert.externalAgentKey}' outside the selected eligible top-level set. Refresh discovery and retry the selected import.`,
+        metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
+      });
+    }
+    const currentEligible = eligibleByKey.get(upsert.externalAgentKey);
+    if (!currentEligible) {
+      await logFailureAndThrow(ctx, {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        message: `Finalize payload included agent '${upsert.externalAgentKey}' outside the selected eligible top-level set. Refresh discovery and retry the selected import.`,
+        metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
+      });
+    }
+    if (currentEligible.repoRelPath !== upsert.repoRelPath || currentEligible.fingerprint !== upsert.fingerprint) {
+      await logFailureAndThrow(ctx, {
+        companyId: input.companyId,
+        projectId: input.projectId,
+        message: `Finalize payload for '${upsert.externalAgentKey}' no longer matches the current eligible top-level discovery state. Refresh discovery before finalizing import.`,
+        metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
+      });
+    }
     if (!agentIdByExternalKey.get(upsert.externalAgentKey)) {
       await logFailureAndThrow(ctx, {
         companyId: input.companyId,
@@ -450,23 +529,8 @@ async function finalizeSyncProject(
     canonicalRepoRef: resolvedWorkspace.repoRef,
     lastScanFingerprint: input.lastScanFingerprint,
     lastImportedAt: input.importedAt,
-    importedAgents: input.agentUpserts.map((entry: typeof input.agentUpserts[number]) => ({
-      paperclipAgentId: agentIdByExternalKey.get(entry.externalAgentKey) ?? unreachable("Expected finalized agent id."),
-      externalAgentKey: entry.externalAgentKey,
-      repoRelPath: entry.repoRelPath,
-      fingerprint: entry.fingerprint,
-      canonicalLocator: `${resolvedWorkspace.cwd}::${entry.repoRelPath}`,
-      externalAgentName: eligibleAgentsByKey.get(entry.externalAgentKey)?.displayName ?? entry.externalAgentKey,
-      lastImportedAt: input.importedAt,
-      lastExportedFingerprint: previousState.importedAgents.find(
-        (agent: OpencodeProjectSyncManifestAgent) => agent.externalAgentKey === entry.externalAgentKey,
-      )?.lastExportedFingerprint ?? null,
-      lastExportedAt: previousState.importedAgents.find(
-        (agent: OpencodeProjectSyncManifestAgent) => agent.externalAgentKey === entry.externalAgentKey,
-      )?.lastExportedAt ?? null,
-    })),
-    selectedAgents: reconcileSelectedAgents(input.selectedAgentKeys, discovery, input.importedAt),
-    legacyOutOfScopeEntities: previousState.legacyOutOfScopeEntities,
+    importedAgents: selectedImportedAgentsFromFinalizeInput(input, resolvedWorkspace, discovery, previousState),
+    selectedAgents,
     warnings: input.warnings,
     conflicts: [],
   });

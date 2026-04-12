@@ -118,7 +118,6 @@ describe("opencode project package schemas", () => {
       },
       selectedAgents: [],
       importedAgents: [],
-      legacyOutOfScopeEntities: [],
       warnings: [],
       conflicts: [],
     });
