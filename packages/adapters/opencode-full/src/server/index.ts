@@ -11,15 +11,51 @@ import type { ZodIssue } from "zod";
 import { opencodeFullRuntimeConfigSchema } from "./config-schema.js";
 import { sessionCodec as baseSessionCodec } from "./session-codec.js";
 import { getOpencodeFullConfigSchema } from "./config-schema.js";
+import { deserializeLocalCliSessionParams, executeLocalCli, serializeLocalCliSessionParams } from "./execute.js";
+import { listLocalCliOpenCodeModels } from "./models.js";
 import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { testLocalCliEnvironment } from "./test.js";
 
-export const sessionCodec: AdapterSessionCodec = baseSessionCodec;
+export const sessionCodec: AdapterSessionCodec = {
+  deserialize(raw: unknown) {
+    return deserializeLocalCliSessionParams(raw) ?? baseSessionCodec.deserialize(raw);
+  },
+  serialize(params: Record<string, unknown> | null) {
+    return serializeLocalCliSessionParams(params) ?? baseSessionCodec.serialize(params);
+  },
+  getDisplayId(params: Record<string, unknown> | null) {
+    const local = deserializeLocalCliSessionParams(params);
+    if (local) return local.sessionId;
+    return baseSessionCodec.getDisplayId?.(params) ?? null;
+  },
+};
 
 export function getConfigSchema(): AdapterConfigSchema {
   return getOpencodeFullConfigSchema();
 }
 
 export async function listOpenCodeFullModels(): Promise<AdapterModel[]> {
+  const runtimeConfig = opencodeFullRuntimeConfigSchema.safeParse({
+    executionMode: "local_cli",
+    model: "openai/gpt-5.4",
+    timeoutSec: 120,
+    connectTimeoutSec: 10,
+    eventStreamIdleTimeoutSec: 30,
+    failFastWhenUnavailable: true,
+    localCli: {
+      command: "opencode",
+      allowProjectConfig: true,
+      dangerouslySkipPermissions: false,
+      graceSec: 5,
+      env: {},
+    },
+  });
+
+  if (runtimeConfig.success) {
+    const discovered = await listLocalCliOpenCodeModels(runtimeConfig.data);
+    if (discovered.length > 0) return discovered;
+  }
+
   return [
     { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },
     { id: "openai/gpt-5.2-codex", label: "openai/gpt-5.2-codex" },
@@ -45,6 +81,10 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
 
   const mode = parsed.data.executionMode;
   const testedAt = new Date().toISOString();
+
+  if (mode === "local_cli") {
+    return testLocalCliEnvironment(ctx, parsed.data);
+  }
 
   if (mode === "remote_server") {
     const target = resolveRemoteTargetIdentity(parsed.data.remoteServer.projectTarget);
@@ -131,6 +171,9 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const parsed = opencodeFullRuntimeConfigSchema.parse(ctx.config);
+  if (parsed.executionMode === "local_cli") {
+    return executeLocalCli(ctx, parsed);
+  }
   const suffix = parsed.executionMode === "local_sdk"
     ? "local_sdk is explicitly deferred and is not wired as an executable runtime path."
     : "Runtime execution lands in later cycles; Cycle 1.1 freezes contracts and isolation helpers only.";
@@ -151,6 +194,8 @@ export {
   getOpencodeFullConfigSchema,
   opencodeFullExecutionModeSchema,
   opencodeFullLocalCliPersistedConfigSchema,
+  type OpencodeFullLocalCliPersistedConfig,
+  type OpencodeFullLocalCliRuntimeConfig,
   opencodeFullLocalSdkPersistedConfigSchema,
   opencodeFullPersistedConfigSchema,
   opencodeFullRemoteAuthPersistedSchema,
@@ -166,6 +211,19 @@ export {
   type OpencodeFullRemoteProjectTarget,
   type OpencodeFullRuntimeConfig,
 } from "./config-schema.js";
+export {
+  discoverLocalCliOpenCodeModels,
+  ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  listLocalCliOpenCodeModels,
+} from "./models.js";
+export {
+  deserializeLocalCliSessionParams,
+  executeLocalCli,
+  isOpenCodeUnknownSessionError,
+  parseOpenCodeJsonl,
+  serializeLocalCliSessionParams,
+  type LocalCliSessionParams,
+} from "./execute.js";
 export { buildRemoteAuthHeaders, describePersistedRemoteAuth } from "./remote-auth.js";
 export {
   getRemoteTargetMode,
@@ -183,3 +241,5 @@ export {
   type OpencodeFullRemoteSessionParams,
   type OpencodeFullSessionOwnership,
 } from "./session-codec.js";
+export { prepareLocalCliRuntimeConfig, resetLocalCliOpenCodeModelsCacheForTests } from "./models.js";
+export { testLocalCliEnvironment } from "./test.js";
