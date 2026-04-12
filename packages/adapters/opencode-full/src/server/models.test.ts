@@ -3,8 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const runChildProcess = vi.fn();
-const ensurePathInEnv = vi.fn((env: Record<string, string>) => env);
+const mocked = vi.hoisted(() => ({
+  runChildProcess: vi.fn(),
+  ensurePathInEnv: vi.fn((env: Record<string, string>) => env),
+}));
 
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   const actual = await vi.importActual<typeof import("@paperclipai/adapter-utils/server-utils")>(
@@ -12,8 +14,8 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   );
   return {
     ...actual,
-    ensurePathInEnv,
-    runChildProcess,
+    ensurePathInEnv: mocked.ensurePathInEnv,
+    runChildProcess: mocked.runChildProcess,
   };
 });
 
@@ -70,8 +72,8 @@ function makeTempDir(): string {
 
 describe("opencode_full local_cli models/runtime config", () => {
   afterEach(() => {
-    runChildProcess.mockReset();
-    ensurePathInEnv.mockClear();
+    mocked.runChildProcess.mockReset();
+    mocked.ensurePathInEnv.mockClear();
     resetLocalCliOpenCodeModelsCacheForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -115,7 +117,7 @@ describe("opencode_full local_cli models/runtime config", () => {
   });
 
   it("parses, dedupes, and sorts discovered models", async () => {
-    runChildProcess.mockResolvedValue({
+    mocked.runChildProcess.mockResolvedValue({
       timedOut: false,
       exitCode: 0,
       stdout: [
@@ -140,7 +142,7 @@ describe("opencode_full local_cli models/runtime config", () => {
       { id: "openai/gpt-4.1", label: "openai/gpt-4.1" },
       { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },
     ]);
-    expect(runChildProcess).toHaveBeenCalledWith(
+    expect(mocked.runChildProcess).toHaveBeenCalledWith(
       expect.stringMatching(/^opencode-full-models-/),
       "custom-opencode",
       ["models"],
@@ -152,7 +154,7 @@ describe("opencode_full local_cli models/runtime config", () => {
   });
 
   it("rejects an unavailable configured model", async () => {
-    runChildProcess.mockResolvedValue({
+    mocked.runChildProcess.mockResolvedValue({
       timedOut: false,
       exitCode: 0,
       stdout: ["openai/gpt-4.1", "anthropic/claude-3-7-sonnet"].join("\n"),

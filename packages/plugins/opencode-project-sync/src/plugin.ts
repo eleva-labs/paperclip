@@ -494,15 +494,12 @@ async function finalizeSyncProject(
         metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
       });
     }
-    const currentEligible = eligibleByKey.get(upsert.externalAgentKey);
-    if (!currentEligible) {
-      await logFailureAndThrow(ctx, {
-        companyId: input.companyId,
-        projectId: input.projectId,
-        message: `Finalize payload included agent '${upsert.externalAgentKey}' outside the selected eligible top-level set. Refresh discovery and retry the selected import.`,
-        metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
-      });
-    }
+    const currentEligible = eligibleByKey.get(upsert.externalAgentKey) ?? await logFailureAndThrow(ctx, {
+      companyId: input.companyId,
+      projectId: input.projectId,
+      message: `Finalize payload included agent '${upsert.externalAgentKey}' outside the selected eligible top-level set. Refresh discovery and retry the selected import.`,
+      metadata: { workspaceId: resolvedWorkspace.workspaceId, externalAgentKey: upsert.externalAgentKey },
+    });
     if (currentEligible.repoRelPath !== upsert.repoRelPath || currentEligible.fingerprint !== upsert.fingerprint) {
       await logFailureAndThrow(ctx, {
         companyId: input.companyId,

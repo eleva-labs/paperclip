@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AdapterEnvironmentCheck } from "@paperclipai/adapter-utils";
 import {
   getOpencodeFullConfigSchema,
@@ -25,6 +25,11 @@ describe("opencodeFull config schemas", () => {
       },
     });
 
+    expect(persisted.executionMode).toBe("remote_server");
+    if (persisted.executionMode !== "remote_server") {
+      throw new Error("expected remote_server persisted config");
+    }
+
     expect(persisted.remoteServer.auth).toEqual({
       mode: "bearer",
       token: {
@@ -49,6 +54,11 @@ describe("opencodeFull config schemas", () => {
         projectTarget: { mode: "server_default", requireDedicatedServer: false },
       },
     });
+
+    expect(runtime.executionMode).toBe("remote_server");
+    if (runtime.executionMode !== "remote_server") {
+      throw new Error("expected remote_server runtime config");
+    }
 
     expect(runtime.remoteServer.auth).toEqual({ mode: "bearer", token: "resolved-token" });
   });
@@ -107,6 +117,26 @@ describe("opencodeFull config schemas", () => {
   });
 
   it("reports remote target readiness truthfully in config-only environment checks", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/health")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ status: "ok" }),
+        };
+      }
+      if (url.endsWith("/models")) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ models: [{ id: "openai/gpt-5.4" }] }),
+        };
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
     const serverDefault = await testEnvironment({
       companyId: "company-1",
       adapterType: "opencode_full",
@@ -129,7 +159,8 @@ describe("opencodeFull config schemas", () => {
 
     expect(serverDefault.status).toBe("pass");
     expect(serverDefault.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_runtime_target_resolved",
+      "opencode_remote_server_reachable",
+      "opencode_remote_model_valid",
     ]));
 
     const deferred = await testEnvironment({
@@ -157,7 +188,7 @@ describe("opencodeFull config schemas", () => {
 
     expect(deferred.status).toBe("warn");
     expect(deferred.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_runtime_target_unsupported",
+      "opencode_remote_target_not_proven",
     ]));
 
     const unsupported = await testEnvironment({
@@ -178,7 +209,7 @@ describe("opencodeFull config schemas", () => {
           projectTarget: {
             mode: "fixed_path",
             projectPath: "/srv/opencode/company-a",
-            requireDedicatedServer: true,
+            requireDedicatedServer: false,
           },
         },
       },
@@ -186,7 +217,9 @@ describe("opencodeFull config schemas", () => {
 
     expect(unsupported.status).toBe("fail");
     expect(unsupported.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_runtime_target_unsupported",
+      "opencode_remote_target_not_proven",
     ]));
+
+    vi.unstubAllGlobals();
   });
 });

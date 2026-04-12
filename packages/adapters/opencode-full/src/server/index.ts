@@ -34,7 +34,7 @@ export function getConfigSchema(): AdapterConfigSchema {
 }
 
 export async function listOpenCodeFullModels(): Promise<AdapterModel[]> {
-  const runtimeConfig = opencodeFullRuntimeConfigSchema.safeParse({
+  const runtimeConfig = opencodeFullRuntimeConfigSchema.parse({
     executionMode: "local_cli",
     model: "openai/gpt-5.4",
     timeoutSec: 120,
@@ -50,10 +50,16 @@ export async function listOpenCodeFullModels(): Promise<AdapterModel[]> {
     },
   });
 
-  if (runtimeConfig.success) {
-    const discovered = await listLocalCliOpenCodeModels(runtimeConfig.data);
-    if (discovered.length > 0) return discovered;
+  if (runtimeConfig.executionMode !== "local_cli") {
+    return [
+      { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },
+      { id: "openai/gpt-5.2-codex", label: "openai/gpt-5.2-codex" },
+      { id: "openai/gpt-5.2", label: "openai/gpt-5.2" },
+    ];
   }
+
+  const discovered = await listLocalCliOpenCodeModels(runtimeConfig);
+  if (discovered.length > 0) return discovered;
 
   return [
     { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },

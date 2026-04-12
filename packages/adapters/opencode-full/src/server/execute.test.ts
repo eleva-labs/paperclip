@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
 
-const ensureAbsoluteDirectory = vi.fn();
-const ensureCommandResolvable = vi.fn();
-const ensurePathInEnv = vi.fn((env: Record<string, string>) => env);
-const resolveCommandForLogs = vi.fn(async (command: string) => command);
-const runChildProcess = vi.fn();
-const prepareLocalCliRuntimeConfig = vi.fn();
-const ensureLocalCliOpenCodeModelConfiguredAndAvailable = vi.fn();
-const ensureRemoteServerOpenCodeModelConfiguredAndAvailable = vi.fn();
+const mocked = vi.hoisted(() => ({
+  ensureAbsoluteDirectory: vi.fn(),
+  ensureCommandResolvable: vi.fn(),
+  ensurePathInEnv: vi.fn((env: Record<string, string>) => env),
+  resolveCommandForLogs: vi.fn(async (command: string) => command),
+  runChildProcess: vi.fn(),
+  prepareLocalCliRuntimeConfig: vi.fn(),
+  ensureLocalCliOpenCodeModelConfiguredAndAvailable: vi.fn(),
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable: vi.fn(),
+}));
 
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   const actual = await vi.importActual<typeof import("@paperclipai/adapter-utils/server-utils")>(
@@ -15,18 +18,18 @@ vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
   );
   return {
     ...actual,
-    ensureAbsoluteDirectory,
-    ensureCommandResolvable,
-    ensurePathInEnv,
-    resolveCommandForLogs,
-    runChildProcess,
+    ensureAbsoluteDirectory: mocked.ensureAbsoluteDirectory,
+    ensureCommandResolvable: mocked.ensureCommandResolvable,
+    ensurePathInEnv: mocked.ensurePathInEnv,
+    resolveCommandForLogs: mocked.resolveCommandForLogs,
+    runChildProcess: mocked.runChildProcess,
   };
 });
 
 vi.mock("./models.js", () => ({
-  prepareLocalCliRuntimeConfig,
-  ensureLocalCliOpenCodeModelConfiguredAndAvailable,
-  ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
+  prepareLocalCliRuntimeConfig: mocked.prepareLocalCliRuntimeConfig,
+  ensureLocalCliOpenCodeModelConfiguredAndAvailable: mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable,
+  ensureRemoteServerOpenCodeModelConfiguredAndAvailable: mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable,
 }));
 
 import { executeLocalCli, executeRemoteServer } from "./execute.js";
@@ -68,11 +71,19 @@ const remoteServerConfig = {
   },
 };
 
-function createExecutionContext(overrides: Partial<Parameters<typeof executeLocalCli>[0]> = {}) {
+function createExecutionContext(overrides: Partial<AdapterExecutionContext> = {}) {
+  const runtime = {
+    sessionId: null,
+    sessionParams: null,
+    sessionDisplayId: null,
+    taskKey: null,
+    ...(overrides.runtime ?? {}),
+  };
+
   return {
     runId: "run-1",
     agent: { id: "agent-1", name: "Agent 1", companyId: "company-1" },
-    runtime: { sessionId: null, sessionParams: null },
+    runtime,
     config: localCliConfig,
     context: {
       paperclipWorkspace: {
@@ -92,24 +103,24 @@ function createExecutionContext(overrides: Partial<Parameters<typeof executeLoca
 
 describe("opencode_full local_cli execute", () => {
   afterEach(() => {
-    ensureAbsoluteDirectory.mockReset();
-    ensureCommandResolvable.mockReset();
-    ensurePathInEnv.mockClear();
-    resolveCommandForLogs.mockClear();
-    runChildProcess.mockReset();
-    prepareLocalCliRuntimeConfig.mockReset();
-    ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockReset();
-    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockReset();
+    mocked.ensureAbsoluteDirectory.mockReset();
+    mocked.ensureCommandResolvable.mockReset();
+    mocked.ensurePathInEnv.mockClear();
+    mocked.resolveCommandForLogs.mockClear();
+    mocked.runChildProcess.mockReset();
+    mocked.prepareLocalCliRuntimeConfig.mockReset();
+    mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockReset();
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockReset();
     vi.unstubAllGlobals();
   });
 
   it("normalizes a successful local_cli execution result", async () => {
     const cleanup = vi.fn(async () => {});
-    ensureAbsoluteDirectory.mockResolvedValue(undefined);
-    ensureCommandResolvable.mockResolvedValue(undefined);
-    prepareLocalCliRuntimeConfig.mockResolvedValue({ env: { FROM_RUNTIME_CONFIG: "1" }, notes: ["note-1"], cleanup });
-    ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
-    runChildProcess.mockResolvedValue({
+    mocked.ensureAbsoluteDirectory.mockResolvedValue(undefined);
+    mocked.ensureCommandResolvable.mockResolvedValue(undefined);
+    mocked.prepareLocalCliRuntimeConfig.mockResolvedValue({ env: { FROM_RUNTIME_CONFIG: "1" }, notes: ["note-1"], cleanup });
+    mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.runChildProcess.mockResolvedValue({
       exitCode: 0,
       signal: null,
       timedOut: false,
@@ -146,7 +157,7 @@ describe("opencode_full local_cli execute", () => {
         repoRef: "feature/worktree",
       },
     });
-    expect(runChildProcess).toHaveBeenCalledWith(
+    expect(mocked.runChildProcess).toHaveBeenCalledWith(
       "run-1",
       "opencode",
       ["run", "--format", "json", "--model", "openai/gpt-5.4", "--variant", "fast"],
@@ -158,11 +169,11 @@ describe("opencode_full local_cli execute", () => {
 
   it("ignores invalid saved session params and starts fresh", async () => {
     const onLog = vi.fn(async () => {});
-    ensureAbsoluteDirectory.mockResolvedValue(undefined);
-    ensureCommandResolvable.mockResolvedValue(undefined);
-    prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, notes: [], cleanup: vi.fn(async () => {}) });
-    ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
-    runChildProcess.mockResolvedValue({
+    mocked.ensureAbsoluteDirectory.mockResolvedValue(undefined);
+    mocked.ensureCommandResolvable.mockResolvedValue(undefined);
+    mocked.prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, notes: [], cleanup: vi.fn(async () => {}) });
+    mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.runChildProcess.mockResolvedValue({
       exitCode: 0,
       signal: null,
       timedOut: false,
@@ -170,9 +181,9 @@ describe("opencode_full local_cli execute", () => {
       stderr: "",
     });
 
-    await executeLocalCli(createExecutionContext({ runtime: { sessionId: "bad-session", sessionParams: { remoteSessionId: "remote-1" } }, onLog }), localCliConfig);
+    await executeLocalCli(createExecutionContext({ runtime: { sessionId: "bad-session", sessionParams: { remoteSessionId: "remote-1" }, sessionDisplayId: null, taskKey: null }, onLog }), localCliConfig);
 
-    expect(runChildProcess).toHaveBeenCalledWith(
+    expect(mocked.runChildProcess).toHaveBeenCalledWith(
       "run-1",
       "opencode",
       ["run", "--format", "json", "--model", "openai/gpt-5.4", "--variant", "fast"],
@@ -186,11 +197,11 @@ describe("opencode_full local_cli execute", () => {
 
   it("retries with a fresh session when the saved session is stale", async () => {
     const onLog = vi.fn(async () => {});
-    ensureAbsoluteDirectory.mockResolvedValue(undefined);
-    ensureCommandResolvable.mockResolvedValue(undefined);
-    prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, notes: [], cleanup: vi.fn(async () => {}) });
-    ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
-    runChildProcess
+    mocked.ensureAbsoluteDirectory.mockResolvedValue(undefined);
+    mocked.ensureCommandResolvable.mockResolvedValue(undefined);
+    mocked.prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, notes: [], cleanup: vi.fn(async () => {}) });
+    mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.runChildProcess
       .mockResolvedValueOnce({
         exitCode: 1,
         signal: null,
@@ -213,20 +224,22 @@ describe("opencode_full local_cli execute", () => {
         runtime: {
           sessionId: "stale-session",
           sessionParams: { executionMode: "local_cli", sessionId: "stale-session", cwd: "/repo/worktree" },
+          sessionDisplayId: "stale-session",
+          taskKey: null,
         },
         onLog,
       }),
       localCliConfig,
     );
 
-    expect(runChildProcess).toHaveBeenNthCalledWith(
+    expect(mocked.runChildProcess).toHaveBeenNthCalledWith(
       1,
       "run-1",
       "opencode",
       ["run", "--format", "json", "--session", "stale-session", "--model", "openai/gpt-5.4", "--variant", "fast"],
       expect.any(Object),
     );
-    expect(runChildProcess).toHaveBeenNthCalledWith(
+    expect(mocked.runChildProcess).toHaveBeenNthCalledWith(
       2,
       "run-1",
       "opencode",
@@ -240,13 +253,13 @@ describe("opencode_full local_cli execute", () => {
     expect(result).toMatchObject({
       exitCode: 0,
       sessionId: "fresh-session",
-      clearSession: true,
+      clearSession: false,
       summary: "recovered",
     });
   });
 
   it("normalizes a minimal remote server_default execution and persists remote ownership", async () => {
-    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -303,7 +316,7 @@ describe("opencode_full local_cli execute", () => {
   });
 
   it("refuses remote resume when any gating field changes", async () => {
-    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -366,7 +379,7 @@ describe("opencode_full local_cli execute", () => {
   });
 
   it("distinguishes remote ownership and target-isolation failures clearly", async () => {
-    ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: false,

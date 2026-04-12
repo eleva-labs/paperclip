@@ -31,6 +31,7 @@ const pluginUiState = vi.hoisted(() => ({
   hostContext: {
     companyId: "11111111-1111-4111-8111-111111111111",
     projectId: "22222222-2222-4222-8222-222222222222",
+    userId: "44444444-4444-4444-8444-444444444444",
     companyPrefix: null,
   },
   actions: new Map<string, ReturnType<typeof vi.fn>>(),
@@ -78,7 +79,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  pluginUiState.hostContext = { companyId, projectId, companyPrefix: null };
+  pluginUiState.hostContext = { companyId, projectId, userId: "44444444-4444-4444-8444-444444444444", companyPrefix: null };
 });
 
 function seedUiData(key: string, value: unknown) {
@@ -485,7 +486,7 @@ describe("opencode project sync plugin cycle 2.1", () => {
 
 describe("opencode project sync plugin cycle 3.1 ui", () => {
   it("renders top-level preview messaging, selection controls, and keeps import gated until selection", async () => {
-    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const { ProjectDetailTab } = await import("../src/ui/index.js");
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -533,7 +534,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
 
     await act(async () => {
-      root.render(React.createElement(ProjectDetailTab, {}));
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
     });
 
     expect(container.textContent).toContain("Eligible top-level agents");
@@ -572,7 +573,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
   });
 
   it("persists selected agents from state, auto-deselects removed files, and finalizes only selected ids", async () => {
-    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const { ProjectDetailTab } = await import("../src/ui/index.js");
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -660,7 +661,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await act(async () => {
-      root.render(React.createElement(ProjectDetailTab, {}));
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
     });
 
     let checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
@@ -678,7 +679,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     });
 
     await act(async () => {
-      root.render(React.createElement(ProjectDetailTab, {}));
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
     });
 
     checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
@@ -697,7 +698,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     });
 
     await act(async () => {
-      root.render(React.createElement(ProjectDetailTab, {}));
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
     });
 
     const importButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Import now"));
@@ -718,7 +719,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
   });
 
   it("blocks import when eligible rows collide on externalAgentKey and keeps row selection file-scoped", async () => {
-    const { ProjectDetailTab } = await import("../src/ui/index.tsx");
+    const { ProjectDetailTab } = await import("../src/ui/index.js");
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -764,7 +765,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
 
     await act(async () => {
-      root.render(React.createElement(ProjectDetailTab, {}));
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
     });
 
     const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
