@@ -25,7 +25,7 @@ import {
   buildImportPlan,
   type MinimalPaperclipAgent,
 } from "./import-plan.js";
-import { writeContainedExportFile } from "./export-write-guard.js";
+import { writeGuardedAgentExportFile } from "./export-write-guard.js";
 import { buildExportPlan, validateExportRepoRelPath } from "./export-plan.js";
 import {
   opencodeProjectFinalizeSyncInputSchema,
@@ -596,6 +596,7 @@ async function exportProject(
 
   const plan = buildExportPlan({
     state: syncState,
+    repoRoot: resolvedWorkspace.cwd,
     currentRepoFingerprint: discovery.lastScanFingerprint,
     forceIfRepoUnchangedCheckFails: input.forceIfRepoUnchangedCheckFails,
     exportAgents: input.exportAgents,
@@ -637,7 +638,12 @@ async function exportProject(
     const repoRelPath = validatedTarget.repoRelPath;
 
     try {
-      writeContainedExportFile(resolvedWorkspace.cwd, repoRelPath, file.content);
+      writeGuardedAgentExportFile(
+        resolvedWorkspace.cwd,
+        repoRelPath,
+        file.sourceFingerprint,
+        file.nextContent,
+      );
     } catch (error) {
       await logFailureAndThrow(ctx, {
         companyId: input.companyId,

@@ -6,6 +6,7 @@ import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Company, Project } from "@paperclipai/plugin-sdk";
 import manifest, {
   OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
+  OPENCODE_PROJECT_EXPORT_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
 } from "../src/manifest.js";
@@ -293,5 +294,144 @@ describe("opencode project sync plugin cycle 2.1", () => {
         { externalAgentKey: "writer", paperclipAgentId: "66666666-6666-4666-8666-666666666666" },
       ],
     })).rejects.toThrow(/outside the selected eligible top-level set/i);
+  });
+
+  it("exports only selected managed top-level agents and leaves root/skill files untouched", async () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".git/HEAD", "ref: refs/heads/main\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "---\nname: Researcher\nmode: subagent\n---\n# Original\n");
+    writeFile(repoRoot, ".opencode/agents/writer.md", "# Writer\n");
+    writeFile(repoRoot, "AGENTS.md", "# Root agents\n");
+    writeFile(repoRoot, ".opencode/skills/demo/SKILL.md", "# Skill\n");
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      companies: [company],
+      projects: [makeProject(repoRoot)],
+      agents: [{
+        id: "55555555-5555-4555-8555-555555555555",
+        companyId,
+        name: "Researcher",
+        description: null,
+        systemPrompt: null,
+        model: null,
+        status: "idle",
+        priority: 0,
+        role: "worker",
+        isDefault: false,
+        budgetWindow: "monthly",
+        budgetTokens: null,
+        budgetDollars: null,
+        budgetMinutes: null,
+        spentTokens: 0,
+        spentDollars: 0,
+        spentMinutes: 0,
+        adapterType: "opencode_project_local",
+        adapterConfig: { promptTemplate: "# Updated from Paperclip\n" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/researcher.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/researcher.md`,
+          externalAgentKey: "researcher",
+          externalAgentName: "Researcher",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: null,
+          lastImportedAt: null,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastActiveAt: null,
+        pausedAt: null,
+        pauseReason: null,
+        terminatedAt: null,
+        terminationReason: null,
+        archivedAt: null,
+        archivedByUserId: null,
+        approvedAt: null,
+        approvedByUserId: null,
+        approvalStatus: "approved",
+        approvalRequestId: null,
+        currentTaskId: null,
+        currentIssueId: null,
+        iconName: null,
+        schedule: null,
+        env: null,
+        tools: null,
+        workspaceId: null,
+        reportsTo: null,
+        title: "Lead researcher",
+      } as any],
+    });
+
+    await harness.performAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, { companyId, projectId });
+    const plan = await harness.performAction<any>(OPENCODE_PROJECT_SYNC_ACTION_KEY, {
+      companyId,
+      projectId,
+      mode: "import",
+      dryRun: false,
+      selectedAgentKeys: ["researcher"],
+    });
+    await harness.performAction<any>(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, {
+      companyId,
+      projectId,
+      workspaceId: plan.workspaceId,
+      importedAt: "2026-04-11T12:34:56.000Z",
+      lastScanFingerprint: plan.lastScanFingerprint,
+      selectedAgentKeys: ["researcher"],
+      warnings: plan.warnings,
+      agentUpserts: plan.agentUpserts.map((entry: any) => ({
+        operation: entry.operation,
+        paperclipAgentId: entry.paperclipAgentId,
+        externalAgentKey: entry.externalAgentKey,
+        repoRelPath: entry.repoRelPath,
+        fingerprint: entry.fingerprint,
+      })),
+      appliedAgents: [{ externalAgentKey: "researcher", paperclipAgentId: "55555555-5555-4555-8555-555555555555" }],
+    });
+
+    const result = await harness.performAction<any>(OPENCODE_PROJECT_EXPORT_ACTION_KEY, {
+      companyId,
+      projectId,
+      exportAgents: true,
+      forceIfRepoUnchangedCheckFails: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.writtenFiles).toEqual([".opencode/agents/researcher.md"]);
+    expect(fs.readFileSync(path.join(repoRoot, ".opencode/agents/researcher.md"), "utf8")).toBe(
+      "---\nname: Researcher\nmode: subagent\n---\n# Updated from Paperclip\n",
+    );
+    expect(fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf8")).toBe("# Root agents\n");
+    expect(fs.readFileSync(path.join(repoRoot, ".opencode/skills/demo/SKILL.md"), "utf8")).toBe("# Skill\n");
+  });
+
+  it("blocks export when repo drift would overwrite unknown edits", async () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".git/HEAD", "ref: refs/heads/main\n");
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Researcher\n");
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({ companies: [company], projects: [makeProject(repoRoot)] });
+
+    await harness.performAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, { companyId, projectId });
+    writeFile(repoRoot, ".opencode/agents/researcher.md", "# Changed after import\n");
+
+    await expect(harness.performAction<any>(OPENCODE_PROJECT_EXPORT_ACTION_KEY, {
+      companyId,
+      projectId,
+      exportAgents: true,
+      forceIfRepoUnchangedCheckFails: false,
+    })).rejects.toThrow(/changed since the last import/i);
   });
 });

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseAgentSourceDocument } from "./export-plan.js";
 
 function realpath(filePath: string): string {
   return typeof fs.realpathSync.native === "function"
@@ -29,8 +30,7 @@ function assertSafeExistingPath(canonicalRepoRoot: string, repoRelPath: string, 
   }
 }
 
-export function writeContainedExportFile(repoRoot: string, repoRelPath: string, content: string): void {
-  const canonicalRepoRoot = realpath(repoRoot);
+function ensureSafeParentPath(canonicalRepoRoot: string, repoRelPath: string): string {
   const targetPath = path.resolve(canonicalRepoRoot, repoRelPath);
   const relativeToRepoRoot = path.relative(canonicalRepoRoot, targetPath);
   if (relativeToRepoRoot.startsWith("..") || path.isAbsolute(relativeToRepoRoot)) {
@@ -55,6 +55,13 @@ export function writeContainedExportFile(repoRoot: string, repoRelPath: string, 
     fs.mkdirSync(currentPath);
   }
 
+  return targetPath;
+}
+
+export function writeContainedExportFile(repoRoot: string, repoRelPath: string, content: string): void {
+  const canonicalRepoRoot = realpath(repoRoot);
+  const targetPath = ensureSafeParentPath(canonicalRepoRoot, repoRelPath);
+
   if (fs.existsSync(targetPath)) {
     assertSafeExistingPath(canonicalRepoRoot, repoRelPath, targetPath);
     if (fs.statSync(targetPath).isDirectory()) {
@@ -73,4 +80,39 @@ export function writeContainedExportFile(repoRoot: string, repoRelPath: string, 
   } finally {
     fs.closeSync(handle);
   }
+}
+
+export function writeGuardedAgentExportFile(
+  repoRoot: string,
+  repoRelPath: string,
+  expectedFingerprint: string,
+  nextContent: string,
+): void {
+  const canonicalRepoRoot = realpath(repoRoot);
+  const targetPath = ensureSafeParentPath(canonicalRepoRoot, repoRelPath);
+
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`Export target '${repoRelPath}' no longer exists in the repo and cannot be exported safely.`);
+  }
+
+  assertSafeExistingPath(canonicalRepoRoot, repoRelPath, targetPath);
+  if (!fs.statSync(targetPath).isFile()) {
+    throw new Error(`Export target '${repoRelPath}' is not a file and cannot be exported safely.`);
+  }
+
+  const currentContent = fs.readFileSync(targetPath, "utf8");
+  const parsed = parseAgentSourceDocument(currentContent);
+  if (!parsed) {
+    throw new Error(
+      `Export target '${repoRelPath}' is no longer parseable as optional frontmatter plus markdown body and cannot be exported safely.`,
+    );
+  }
+
+  if (expectedFingerprint !== currentContent) {
+    throw new Error(
+      `Export target '${repoRelPath}' changed on disk since planning and cannot be exported safely without re-importing.`,
+    );
+  }
+
+  writeContainedExportFile(canonicalRepoRoot, repoRelPath, nextContent);
 }
