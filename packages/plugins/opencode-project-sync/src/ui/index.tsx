@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL } from "@paperclipai/shared";
 import {
   useHostContext,
   usePluginAction,
@@ -90,6 +91,9 @@ type PreviewData = {
       role: string | null;
       advisoryMode: "primary" | "subagent" | null;
       selectionDefault: boolean;
+      frontmatter: {
+        model: string | null;
+      };
     }>;
     ineligibleNestedAgents: Array<{
       externalAgentKey: string;
@@ -265,6 +269,11 @@ function agentApiPath(agentId: string, suffix = ""): string {
   return `${OPENCODE_PROJECT_HOST_API_BASE_PATH}/agents/${encodeURIComponent(agentId)}${suffix}`;
 }
 
+function buildProjectTabHref(companyPrefix: string | null, projectId: string): string {
+  const prefix = companyPrefix && companyPrefix.trim().length > 0 ? companyPrefix : "/app";
+  return `${prefix}/projects/${encodeURIComponent(projectId)}`;
+}
+
 async function applySyncPlan(companyId: string, plan: SyncPlanResult) {
   const agentIdByExternalKey = new Map<string, string>();
   for (const upsert of plan.agentUpserts) {
@@ -345,6 +354,46 @@ function InlineNotice({ title, body, tone }: { title: string; body: string; tone
       <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5 }}>{body}</div>
     </div>
   );
+}
+
+function getAgentModelWarning(repoRelPath: string, warnings: string[]): string | null {
+  return warnings.find((warning) => warning.startsWith(`${repoRelPath}:`) && warning.includes("Frontmatter field 'model'")) ?? null;
+}
+
+function getAgentModelOutcome(args: {
+  repoRelPath: string;
+  declaredModel: string | null;
+  warnings: string[];
+  wasImportedBefore: boolean;
+}): { summary: string; detail: string; warning: string | null } {
+  const warning = getAgentModelWarning(args.repoRelPath, args.warnings);
+  if (args.declaredModel) {
+    return {
+      summary: `Effective model: ${args.declaredModel}`,
+      detail: "Declared frontmatter.model will override any previously saved synced model on import/update.",
+      warning,
+    };
+  }
+  if (warning) {
+    return {
+      summary: args.wasImportedBefore
+        ? "Effective model: keep the existing saved Paperclip model"
+        : `Effective model: shared default (${DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL})`,
+      detail: args.wasImportedBefore
+        ? "Invalid frontmatter.model is ignored; refresh sync preserves the current saved Paperclip model for this already-imported agent."
+        : `Invalid frontmatter.model is ignored; first import falls back to the shared default model ${DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL}.`,
+      warning,
+    };
+  }
+  return {
+    summary: args.wasImportedBefore
+      ? "Effective model: keep the existing saved Paperclip model"
+      : `Effective model: shared default (${DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL})`,
+    detail: args.wasImportedBefore
+      ? "No frontmatter.model is declared; refresh sync preserves the current saved Paperclip model for this already-imported agent."
+      : `No frontmatter.model is declared; first import falls back to the shared default model ${DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL}.`,
+    warning: null,
+  };
 }
 
 function ProjectOpenCodePanel({ compact = false }: { compact?: boolean }): ReactElement {
@@ -430,6 +479,7 @@ function ProjectOpenCodePanelLoaded({
 
   const eligibleAgents = preview?.eligibleAgents ?? [];
   const eligibleAgentPaths = useMemo(() => eligibleAgents.map((agent) => agent.repoRelPath), [eligibleAgents]);
+  const importedAgentRepoPaths = useMemo(() => new Set((state?.importedAgents ?? []).map((agent) => agent.repoRelPath)), [state?.importedAgents]);
   const duplicateExternalAgentKeys = useMemo(() => {
     const counts = new Map<string, number>();
     for (const agent of eligibleAgents) {
@@ -814,7 +864,17 @@ function ProjectOpenCodePanelLoaded({
                   {preview.eligibleAgents.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No eligible top-level agents discovered yet.</div> : null}
                   {preview.eligibleAgents.map((agent) => (
                     <label key={agent.repoRelPath} style={{ display: "grid", gap: 4, fontSize: 12, lineHeight: 1.45, border: "1px solid var(--border, #2f3545)", borderRadius: 10, padding: 10 }}>
-                      <div style={{ ...rowStyle, flexWrap: "nowrap", alignItems: "flex-start" }}>
+                      {(() => {
+                        const modelOutcome = getAgentModelOutcome({
+                          repoRelPath: agent.repoRelPath,
+                          declaredModel: agent.frontmatter.model,
+                          warnings: preview.warnings,
+                          wasImportedBefore: importedAgentRepoPaths.has(agent.repoRelPath),
+                        });
+
+                        return (
+                          <>
+                            <div style={{ ...rowStyle, flexWrap: "nowrap", alignItems: "flex-start" }}>
                         <input
                           type="checkbox"
                           checked={selectedAgentPaths.includes(agent.repoRelPath)}
@@ -824,14 +884,21 @@ function ProjectOpenCodePanelLoaded({
                               : current.filter((repoRelPath) => repoRelPath !== agent.repoRelPath));
                           }}
                         />
-                        <div style={{ display: "grid", gap: 4 }}>
-                          <strong>{agent.displayName}</strong>
-                          <div style={{ opacity: 0.74 }}>{agent.repoRelPath}</div>
-                          <div style={{ opacity: 0.74 }}>External key: {agent.externalAgentKey}</div>
-                          <div style={{ opacity: 0.74 }}>Role: {agent.role ?? "Not declared"} · Advisory mode: {agent.advisoryMode ?? "unspecified"}</div>
-                          {!state?.selectedAgents?.length && !agent.selectionDefault ? <div style={{ opacity: 0.74 }}>First bootstrap default: unchecked</div> : null}
-                        </div>
-                      </div>
+                              <div style={{ display: "grid", gap: 4 }}>
+                                <strong>{agent.displayName}</strong>
+                                <div style={{ opacity: 0.74 }}>{agent.repoRelPath}</div>
+                                <div style={{ opacity: 0.74 }}>External key: {agent.externalAgentKey}</div>
+                                <div style={{ opacity: 0.74 }}>Role: {agent.role ?? "Not declared"} · Advisory mode: {agent.advisoryMode ?? "unspecified"}</div>
+                                <div style={{ opacity: 0.74 }}>Declared frontmatter.model: {agent.frontmatter.model ?? (modelOutcome.warning ? "Ignored/invalid" : "Not declared")}</div>
+                                <div style={{ opacity: 0.9 }}>{modelOutcome.summary}</div>
+                                <div style={{ opacity: 0.74 }}>{modelOutcome.detail}</div>
+                                {modelOutcome.warning ? <div style={{ color: "#fcd34d" }}>{modelOutcome.warning}</div> : null}
+                                {!state?.selectedAgents?.length && !agent.selectionDefault ? <div style={{ opacity: 0.74 }}>First bootstrap default: unchecked</div> : null}
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </label>
                   ))}
                 </div>

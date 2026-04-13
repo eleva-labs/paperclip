@@ -20,6 +20,9 @@ export const opencodeEligibleAgentSchema = z.object({
   role: z.string().min(1).nullable(),
   advisoryMode: z.enum(["primary", "subagent"]).nullable(),
   selectionDefault: z.boolean(),
+  frontmatter: z.object({
+    model: z.string().min(1).nullable(),
+  }),
 });
 
 export const opencodeIneligibleNestedAgentSchema = z.object({

@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+export type ParsedFrontmatterField<T> =
+  | { status: "absent" }
+  | { status: "valid"; value: T }
+  | { status: "invalid"; warning: string };
+
 export type DiscoveredRepoAgent = {
   externalAgentKey: string;
   displayName: string;
@@ -11,6 +16,9 @@ export type DiscoveredRepoAgent = {
   advisoryMode: "primary" | "subagent" | null;
   selectionDefault: boolean;
   fingerprint: string;
+  frontmatter: {
+    model: string | null;
+  };
 };
 
 export type DiscoveredNestedAgent = {
@@ -24,7 +32,7 @@ export type IgnoredArtifact = {
   repoRelPath: string;
 };
 
-export type DiscoveryWarningCode = "invalid_repo_file" | "identity_collision" | "contradictory_advisory_mode";
+export type DiscoveryWarningCode = "invalid_repo_file" | "identity_collision" | "contradictory_advisory_mode" | "invalid_frontmatter_field";
 
 export type DiscoveryWarning = {
   code: DiscoveryWarningCode;
@@ -239,6 +247,59 @@ function createContradictoryModeWarning(repoRelPath: string, externalAgentKey: s
   return null;
 }
 
+function parseOptionalFrontmatterStringField(
+  attributes: Record<string, unknown>,
+  key: string,
+  options?: {
+    validate?: (value: string) => string | null;
+    invalidTypeMessage?: string;
+    emptyMessage?: string;
+  },
+): ParsedFrontmatterField<string> {
+  if (!(key in attributes)) return { status: "absent" };
+
+  const raw = attributes[key];
+  if (typeof raw !== "string") {
+    return {
+      status: "invalid",
+      warning: options?.invalidTypeMessage ?? `Frontmatter field '${key}' must be a string.`,
+    };
+  }
+
+  const value = raw.trim();
+  if (value.length === 0) {
+    return {
+      status: "invalid",
+      warning: options?.emptyMessage ?? `Frontmatter field '${key}' must not be blank.`,
+    };
+  }
+
+  const validationError = options?.validate?.(value) ?? null;
+  if (validationError) {
+    return { status: "invalid", warning: validationError };
+  }
+
+  return { status: "valid", value };
+}
+
+function validateModelFrontmatterValue(value: string): string | null {
+  return /^[^\s/]+\/[^\s/]+$/.test(value)
+    ? null
+    : "Frontmatter field 'model' must use provider/model format; the declared value will be ignored during sync.";
+}
+
+function extractAgentFrontmatter(attributes: Record<string, unknown>): {
+  model: ParsedFrontmatterField<string>;
+} {
+  return {
+    model: parseOptionalFrontmatterStringField(attributes, "model", {
+      validate: validateModelFrontmatterValue,
+      invalidTypeMessage: "Frontmatter field 'model' must be a string in provider/model format; the declared value will be ignored during sync.",
+      emptyMessage: "Frontmatter field 'model' must not be blank; the declared value will be ignored during sync.",
+    }),
+  };
+}
+
 export function discoverOpencodeProjectFiles(input: { repoRoot: string }): DiscoveredOpencodeProjectFiles {
   const repoRoot = path.resolve(input.repoRoot);
   const warnings: DiscoveryWarning[] = [];
@@ -301,8 +362,18 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
     const displayName = String(parsed.attributes.name ?? extractHeading(parsed.body) ?? titleCase(path.basename(externalAgentKey))).trim();
     const role = typeof parsed.attributes.role === "string" ? parsed.attributes.role.trim() : null;
     const advisoryMode = getAdvisoryMode(parsed.attributes);
+    const frontmatter = extractAgentFrontmatter(parsed.attributes);
     const contradictoryModeWarning = advisoryMode ? createContradictoryModeWarning(repoRelPath, externalAgentKey, advisoryMode) : null;
     if (contradictoryModeWarning) warnings.push(contradictoryModeWarning);
+    if (frontmatter.model.status === "invalid") {
+      warnings.push({
+        code: "invalid_frontmatter_field",
+        message: `${repoRelPath}: ${frontmatter.model.warning}`,
+        repoRelPath,
+        entityType: "agent",
+        entityKey: externalAgentKey,
+      });
+    }
 
     const depth = getAgentDepth(repoRelPath);
     if (depth === 1) {
@@ -328,6 +399,9 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
         advisoryMode,
         selectionDefault: false,
         fingerprint,
+        frontmatter: {
+          model: frontmatter.model.status === "valid" ? frontmatter.model.value : null,
+        },
       });
       continue;
     }

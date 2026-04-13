@@ -59,6 +59,58 @@ describe("opencode project package schemas", () => {
       warnings: [],
     }).success).toBe(true);
 
+    expect(opencodeTopLevelAgentPreviewSchema.safeParse({
+      lastScanFingerprint: "abc",
+      eligibleAgents: [{
+        externalAgentKey: "orchestrator",
+        displayName: "Orchestrator",
+        repoRelPath: ".opencode/agents/orchestrator.md",
+        fingerprint: "fp",
+        role: null,
+        advisoryMode: null,
+        selectionDefault: false,
+        frontmatter: { model: "openai/gpt-5.4" },
+      }],
+      ineligibleNestedAgents: [],
+      ignoredArtifacts: [],
+      warnings: ["warn"],
+    }).success).toBe(true);
+
+    const parsedPreview = opencodeTopLevelAgentPreviewSchema.parse({
+      lastScanFingerprint: "abc",
+      eligibleAgents: [{
+        externalAgentKey: "analyst",
+        displayName: "Analyst",
+        repoRelPath: ".opencode/agents/analyst.md",
+        fingerprint: "fp-2",
+        role: "Analyst",
+        advisoryMode: null,
+        selectionDefault: false,
+        frontmatter: { model: null },
+      }],
+      ineligibleNestedAgents: [],
+      ignoredArtifacts: [],
+      warnings: [],
+    });
+
+    expect(parsedPreview.eligibleAgents[0]?.frontmatter.model).toBeNull();
+
+    expect(opencodeTopLevelAgentPreviewSchema.safeParse({
+      lastScanFingerprint: "abc",
+      eligibleAgents: [{
+        externalAgentKey: "broken",
+        displayName: "Broken",
+        repoRelPath: ".opencode/agents/broken.md",
+        fingerprint: "fp-3",
+        role: null,
+        advisoryMode: null,
+        selectionDefault: false,
+      }],
+      ineligibleNestedAgents: [],
+      ignoredArtifacts: [],
+      warnings: [],
+    }).success).toBe(false);
+
     expect(opencodeProjectConflictSchema.safeParse({
       code: "identity_collision",
       message: "dup",

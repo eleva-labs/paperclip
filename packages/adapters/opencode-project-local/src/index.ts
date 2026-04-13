@@ -1,4 +1,5 @@
 import type { ServerAdapterModule } from "@paperclipai/adapter-utils";
+import { DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL } from "@paperclipai/shared";
 import {
   execute,
   getConfigSchema,
@@ -9,8 +10,6 @@ import {
 
 export const type = "opencode_project_local";
 export const label = "OpenCode (project local)";
-
-export const DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL = "openai/gpt-5.4";
 
 export const models: Array<{ id: string; label: string }> = [
   { id: DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL, label: DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL },

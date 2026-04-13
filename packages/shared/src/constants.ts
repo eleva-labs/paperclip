@@ -37,6 +37,8 @@ export const AGENT_ADAPTER_TYPES = [
 ] as const;
 export type AgentAdapterType = (typeof AGENT_ADAPTER_TYPES)[number] | (string & {});
 
+export const DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL = "openai/gpt-5.4";
+
 export const AGENT_ROLES = [
   "ceo",
   "cto",

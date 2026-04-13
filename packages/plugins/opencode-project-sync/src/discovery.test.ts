@@ -36,6 +36,7 @@ describe("discoverOpencodeProjectFiles", () => {
         externalAgentKey: "researcher",
         repoRelPath: ".opencode/agents/researcher.md",
         selectionDefault: false,
+        frontmatter: { model: null },
       }),
     ]);
     expect(result.ineligibleNestedAgents).toEqual([]);
@@ -105,6 +106,81 @@ describe("discoverOpencodeProjectFiles", () => {
     expect(result.warnings).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "contradictory_advisory_mode", repoRelPath: ".opencode/agents/orchestrator.md" }),
       expect.objectContaining({ code: "contradictory_advisory_mode", repoRelPath: ".opencode/agents/team/qa.md" }),
+    ]));
+  });
+
+  it("extracts a valid top-level frontmatter model", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "---\nmodel: openai/gpt-5.4\n---\n# Orchestrator\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toEqual([
+      expect.objectContaining({
+        externalAgentKey: "orchestrator",
+        frontmatter: { model: "openai/gpt-5.4" },
+      }),
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("warns on invalid model frontmatter and keeps discovery eligible", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "---\nmodel: invalidmodel\n---\n# Orchestrator\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toEqual([
+      expect.objectContaining({
+        externalAgentKey: "orchestrator",
+        frontmatter: { model: null },
+      }),
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "invalid_frontmatter_field",
+        repoRelPath: ".opencode/agents/orchestrator.md",
+      }),
+    ]));
+  });
+
+  it("warns on blank model frontmatter and resolves model to null", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "---\nmodel: \"   \"\n---\n# Orchestrator\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toEqual([
+      expect.objectContaining({
+        externalAgentKey: "orchestrator",
+        frontmatter: { model: null },
+      }),
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "invalid_frontmatter_field",
+        message: ".opencode/agents/orchestrator.md: Frontmatter field 'model' must not be blank; the declared value will be ignored during sync.",
+      }),
+    ]));
+  });
+
+  it("warns on non-string model frontmatter and resolves model to null", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "---\nmodel: true\n---\n# Orchestrator\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents).toEqual([
+      expect.objectContaining({
+        externalAgentKey: "orchestrator",
+        frontmatter: { model: null },
+      }),
+    ]);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "invalid_frontmatter_field",
+        message: ".opencode/agents/orchestrator.md: Frontmatter field 'model' must be a string in provider/model format; the declared value will be ignored during sync.",
+      }),
     ]));
   });
 });

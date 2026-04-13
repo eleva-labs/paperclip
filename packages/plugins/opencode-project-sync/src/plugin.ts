@@ -266,6 +266,7 @@ function previewFromDiscovery(discovery: DiscoveredOpencodeProjectFiles) {
       role: agent.role,
       advisoryMode: agent.advisoryMode,
       selectionDefault: agent.selectionDefault,
+      frontmatter: agent.frontmatter,
     })),
     ineligibleNestedAgents: discovery.ineligibleNestedAgents,
     ignoredArtifacts: discovery.ignoredArtifacts,

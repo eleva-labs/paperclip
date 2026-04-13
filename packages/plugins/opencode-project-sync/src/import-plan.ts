@@ -1,3 +1,4 @@
+import { DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL } from "@paperclipai/shared";
 import type { OpencodeProjectSyncState } from "./sync-state.js";
 import type {
   ImportedOpencodeAgentMetadata,
@@ -130,6 +131,21 @@ function createConflictsFromDiscoveryWarnings(warnings: DiscoveryWarning[]): Ope
     }));
 }
 
+function asConfiguredModel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^[^\s/]+\/[^\s/]+$/.test(trimmed) ? trimmed : null;
+}
+
+function resolveImportedAgentModel(input: {
+  discoveredAgent: DiscoveredRepoAgent;
+  existing: MinimalPaperclipAgent | null;
+}): string {
+  return input.discoveredAgent.frontmatter.model
+    ?? asConfiguredModel(input.existing?.adapterConfig?.model)
+    ?? DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL;
+}
+
 export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
   const conflicts = createConflictsFromDiscoveryWarnings(input.discovery.warnings);
   const warnings = input.discovery.warnings
@@ -225,6 +241,7 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
 
     const metadataMatch = manifestMatch ? null : provenanceMatches[0] ?? null;
     const existing = manifestMatch ?? metadataMatch ?? null;
+    const resolvedModel = resolveImportedAgentModel({ discoveredAgent, existing });
 
     const existingMetadata = existing ? parseImportedAgentMetadata(existing.metadata) : null;
     const metadata: ImportedOpencodeAgentMetadata = {
@@ -261,6 +278,7 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
         adapterType: existing?.adapterType ?? "opencode_project_local",
         adapterConfig: {
           ...(existing?.adapterConfig ?? {}),
+          model: resolvedModel,
           allowProjectConfig: true,
           syncPluginKey: "paperclip-opencode-project",
           promptTemplate: discoveredAgent.instructionsMarkdown,

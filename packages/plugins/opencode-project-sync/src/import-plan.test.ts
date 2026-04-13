@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL } from "@paperclipai/shared";
 import { buildImportPlan } from "./import-plan.js";
 import type { OpencodeProjectSyncState } from "./sync-state.js";
 
@@ -90,12 +91,13 @@ describe("buildImportPlan", () => {
           externalAgentKey: "researcher",
           displayName: "Researcher",
           role: "Lead researcher",
-          repoRelPath: ".opencode/agents/researcher.md",
-          instructionsMarkdown: "# Researcher\n",
-          advisoryMode: null,
-          selectionDefault: false,
-          fingerprint: "fp-agent-new",
-        }],
+            repoRelPath: ".opencode/agents/researcher.md",
+            instructionsMarkdown: "# Researcher\n",
+            advisoryMode: null,
+            selectionDefault: false,
+            fingerprint: "fp-agent-new",
+            frontmatter: { model: null },
+          }],
       },
     });
 
@@ -110,6 +112,7 @@ describe("buildImportPlan", () => {
           adapterType: "opencode_project_local",
           reportsTo: null,
           adapterConfig: expect.objectContaining({
+            model: "openai/gpt-5.4",
             allowProjectConfig: true,
             syncPluginKey: "paperclip-opencode-project",
           }),
@@ -154,6 +157,7 @@ describe("buildImportPlan", () => {
           advisoryMode: null,
           selectionDefault: false,
           fingerprint: "fp-agent",
+          frontmatter: { model: null },
         }],
       },
     });
@@ -229,6 +233,7 @@ describe("buildImportPlan", () => {
             advisoryMode: null,
             selectionDefault: false,
             fingerprint: "fp-agent-new",
+            frontmatter: { model: null },
           },
           {
             externalAgentKey: "writer",
@@ -239,6 +244,7 @@ describe("buildImportPlan", () => {
             advisoryMode: null,
             selectionDefault: false,
             fingerprint: "fp-writer",
+            frontmatter: { model: null },
           },
         ],
       },
@@ -307,11 +313,12 @@ describe("buildImportPlan", () => {
           externalAgentKey: "researcher",
           displayName: "Researcher",
           role: null,
-          repoRelPath: ".opencode/agents/researcher.md",
-          instructionsMarkdown: "# Researcher\n",
-          advisoryMode: null,
-          selectionDefault: false,
-          fingerprint: "fp-new",
+            repoRelPath: ".opencode/agents/researcher.md",
+            instructionsMarkdown: "# Researcher\n",
+            advisoryMode: null,
+            selectionDefault: false,
+            fingerprint: "fp-new",
+            frontmatter: { model: null },
         }],
       },
     });
@@ -366,6 +373,7 @@ describe("buildImportPlan", () => {
           advisoryMode: null,
           selectionDefault: false,
           fingerprint: "fp-new",
+          frontmatter: { model: null },
         }],
       },
     });
@@ -374,5 +382,332 @@ describe("buildImportPlan", () => {
     expect(plan.conflicts).toEqual([
       expect.objectContaining({ code: "paperclip_entity_drift", entityKey: "researcher" }),
     ]);
+  });
+
+  it("uses declared frontmatter model for new imported agents", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: "openai/gpt-5.4" },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe("openai/gpt-5.4");
+  });
+
+  it("uses a valid declared frontmatter model over an existing saved model on update", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [{
+        id: "agent-1",
+        name: "Orchestrator",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_project_local",
+        adapterConfig: { model: "anthropic/claude-sonnet-4" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/orchestrator.md`,
+          externalAgentKey: "orchestrator",
+          externalAgentName: "Orchestrator",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: "openai/gpt-5.4" },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe("openai/gpt-5.4");
+  });
+
+  it("falls back to shared default model when frontmatter model is absent", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe(DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL);
+  });
+
+  it("preserves an existing saved model on resync when frontmatter model is absent", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [{
+        id: "agent-1",
+        name: "Orchestrator",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_project_local",
+        adapterConfig: { model: "anthropic/claude-sonnet-4" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/orchestrator.md`,
+          externalAgentKey: "orchestrator",
+          externalAgentName: "Orchestrator",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-new",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe("anthropic/claude-sonnet-4");
+  });
+
+  it("preserves an existing valid saved model when declared model is invalid and ignored", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [{
+        id: "agent-1",
+        name: "Orchestrator",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_project_local",
+        adapterConfig: { model: "anthropic/claude-sonnet-4" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/orchestrator.md`,
+          externalAgentKey: "orchestrator",
+          externalAgentName: "Orchestrator",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [{
+          code: "invalid_frontmatter_field",
+          message: ".opencode/agents/orchestrator.md: Frontmatter field 'model' must use provider/model format; the declared value will be ignored during sync.",
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          entityType: "agent",
+          entityKey: "orchestrator",
+        }],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe("anthropic/claude-sonnet-4");
+  });
+
+  it("falls back to the shared default when the existing saved model is invalid and no declared model is present", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [{
+        id: "agent-1",
+        name: "Orchestrator",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_project_local",
+        adapterConfig: { model: "invalidmodel" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/orchestrator.md`,
+          externalAgentKey: "orchestrator",
+          externalAgentName: "Orchestrator",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe(DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL);
+  });
+
+  it("warns and falls back when model frontmatter is invalid", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [],
+      discovery: {
+        warnings: [{
+          code: "invalid_frontmatter_field",
+          message: ".opencode/agents/orchestrator.md: Frontmatter field 'model' must use provider/model format; the declared value will be ignored during sync.",
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          entityType: "agent",
+          entityKey: "orchestrator",
+        }],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.warnings).toContain(".opencode/agents/orchestrator.md: Frontmatter field 'model' must use provider/model format; the declared value will be ignored during sync.");
+    expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe(DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL);
   });
 });
