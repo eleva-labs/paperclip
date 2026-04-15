@@ -77,4 +77,44 @@ describe("opencodeFull runtime schema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects endpoint-specific remote base URLs at runtime", () => {
+    const result = opencodeFullRuntimeConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/session",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "server_default" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("preserves reverse-proxy runtime base paths that only happen to include endpoint words", () => {
+    const result = opencodeFullRuntimeConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/proxy/provider",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "server_default" },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

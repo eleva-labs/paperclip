@@ -5,7 +5,7 @@ export type RemoteTargetIdentityResolution =
   | {
       status: "resolved";
       targetMode: "server_default";
-      resolvedTargetIdentity: "server-default";
+      resolvedTargetIdentity: "server_default";
       message: string;
     }
   | {
@@ -32,7 +32,7 @@ export function resolveRemoteTargetIdentity(rawTarget: unknown): RemoteTargetIde
       return {
         status: "resolved",
         targetMode: "server_default",
-        resolvedTargetIdentity: "server-default",
+        resolvedTargetIdentity: "server_default",
         message: "server_default is the safe baseline remote target identity for the current MVP remote mode.",
       };
     case "paperclip_workspace":

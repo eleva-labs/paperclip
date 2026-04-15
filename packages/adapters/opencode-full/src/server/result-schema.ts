@@ -52,6 +52,7 @@ function normalizeLegacyErrorCode(rawCode: unknown, rawMessage: unknown): z.infe
   if (normalized.includes("ownership_mismatch")) return "OWNERSHIP_MISMATCH";
   if (normalized.includes("target_isolation_failed") || normalized.includes("target_mode_unsupported") || normalized.includes("target_mode_requires")) return "TARGET_ISOLATION_FAILED";
   if (normalized.includes("timeout")) return "TIMEOUT";
+  if (normalized.includes("session_invalid_or_stale")) return "SESSION_INVALID_OR_STALE";
   if (normalized.includes("unavailable") || normalized.includes("unreachable") || normalized.includes("command_missing") || normalized.includes("not executable")) return "UNAVAILABLE";
   return "EXECUTION_FAILED";
 }

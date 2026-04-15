@@ -1,6 +1,7 @@
 import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
 import { envBindingSchema } from "@paperclipai/shared";
 import { z } from "zod";
+import { validateRemoteServerBaseUrl } from "./remote-base-url.js";
 
 export const opencodeFullExecutionModeSchema = z.enum([
   "local_cli",
@@ -85,7 +86,15 @@ export const opencodeFullRemoteProjectTargetSchema = opencodeFullRemoteProjectTa
 });
 
 export const opencodeFullRemoteServerPersistedConfigSchema = z.object({
-  baseUrl: z.string().trim().url(),
+  baseUrl: z.string().trim().url().superRefine((value, ctx) => {
+    const result = validateRemoteServerBaseUrl(value);
+    if (!result.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message,
+      });
+    }
+  }),
   auth: opencodeFullRemoteAuthPersistedSchema.default({ mode: "none" }),
   healthTimeoutSec: z.number().int().positive().default(10),
   requireHealthyServer: z.boolean().default(true),

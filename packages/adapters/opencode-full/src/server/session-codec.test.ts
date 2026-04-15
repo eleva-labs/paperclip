@@ -80,7 +80,7 @@ describe("opencodeFull session codec and isolation", () => {
       },
       baseUrl: "https://opencode.example.com",
       projectTargetMode: "server_default",
-      resolvedTargetIdentity: "server-default",
+      resolvedTargetIdentity: "server_default",
     });
     expect(session.configFingerprint).not.toContain("resolved-token");
   });
@@ -97,7 +97,7 @@ describe("opencodeFull session codec and isolation", () => {
       },
       baseUrl: "https://opencode.example.com",
       projectTargetMode: "server_default",
-      resolvedTargetIdentity: "server-default",
+      resolvedTargetIdentity: "server_default",
     })).toEqual({
       executionMode: "remote_server",
       sessionId: "legacy-remote-session-1",
@@ -115,7 +115,7 @@ describe("opencodeFull session codec and isolation", () => {
       },
       baseUrl: "https://opencode.example.com",
       projectTargetMode: "server_default",
-      resolvedTargetIdentity: "server-default",
+      resolvedTargetIdentity: "server_default",
     });
   });
 

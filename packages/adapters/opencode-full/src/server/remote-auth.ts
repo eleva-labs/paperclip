@@ -39,6 +39,13 @@ export function validateResolvedRemoteAuth(rawAuth: unknown): RemoteAuthCheckRes
     };
   }
 
+  if (parsed.data.mode !== "none") {
+    return {
+      ok: false,
+      reason: "MVP remote execution currently supports only auth.mode=none; other auth branches remain schema placeholders.",
+    };
+  }
+
   return { ok: true, auth: parsed.data };
 }
 

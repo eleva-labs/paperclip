@@ -9,8 +9,8 @@ describe("resolveRemoteTargetIdentity", () => {
     })).toEqual({
       status: "resolved",
       targetMode: "server_default",
-      resolvedTargetIdentity: "server-default",
-      message: "server_default is the safe baseline remote target identity proven in the Cycle 3.1 spike.",
+      resolvedTargetIdentity: "server_default",
+      message: "server_default is the safe baseline remote target identity for the current MVP remote mode.",
     });
   });
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   opencodeFullRemoteProjectTargetSchema,
 } from "./config-schema.js";
+import { validateRemoteServerBaseUrl } from "./remote-base-url.js";
 
 const opencodeFullSharedRuntimeConfigSchema = z.object({
   model: z.string().trim().min(1),
@@ -46,7 +47,15 @@ export const opencodeFullLocalCliRuntimeConfigSchema = opencodeFullSharedRuntime
 export const opencodeFullRemoteServerRuntimeConfigSchema = opencodeFullSharedRuntimeConfigSchema.extend({
   executionMode: z.literal("remote_server"),
   remoteServer: z.object({
-    baseUrl: z.string().trim().url(),
+    baseUrl: z.string().trim().url().superRefine((value, ctx) => {
+      const result = validateRemoteServerBaseUrl(value);
+      if (!result.ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: result.message,
+        });
+      }
+    }),
     auth: opencodeFullRemoteAuthRuntimeSchema,
     healthTimeoutSec: z.number().int().positive(),
     requireHealthyServer: z.boolean(),

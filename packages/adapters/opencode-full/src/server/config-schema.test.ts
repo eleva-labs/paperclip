@@ -88,6 +88,48 @@ describe("opencodeFull config schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects endpoint-specific remote base URLs while preserving server base paths", () => {
+    expect(opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/global/health",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+      },
+    }).success).toBe(false);
+
+    expect(opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/proxy/session",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+      },
+    }).success).toBe(true);
+
+    expect(opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/proxy/opencode",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+      },
+    }).success).toBe(true);
+
+    expect(opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com/session/abc/message",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+      },
+    }).success).toBe(false);
+  });
+
   it("keeps non-none auth branches as persisted schema placeholders", () => {
     const parsed = opencodeFullPersistedConfigSchema.parse({
       executionMode: "remote_server",
