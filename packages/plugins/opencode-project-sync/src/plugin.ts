@@ -55,6 +55,16 @@ type ResolvedCanonicalWorkspace = {
   repoRef: string | null;
 };
 
+function preserveCanonicalWorkspaceProvenance(
+  resolvedWorkspace: ResolvedCanonicalWorkspace,
+): Pick<OpencodeProjectSyncState, "canonicalRepoRoot" | "canonicalRepoUrl" | "canonicalRepoRef"> {
+  return {
+    canonicalRepoRoot: resolvedWorkspace.cwd,
+    canonicalRepoUrl: resolvedWorkspace.repoUrl,
+    canonicalRepoRef: resolvedWorkspace.repoRef,
+  };
+}
+
 type SyncActionResult = {
   ok: true;
   dryRun: boolean;
@@ -178,9 +188,7 @@ async function readOrCreateSyncState(
     projectId: resolvedWorkspace.projectId,
     workspaceId: resolvedWorkspace.workspaceId,
     bootstrapCompletedAt: null,
-    canonicalRepoRoot: resolvedWorkspace.cwd,
-    canonicalRepoUrl: resolvedWorkspace.repoUrl,
-    canonicalRepoRef: resolvedWorkspace.repoRef,
+    ...preserveCanonicalWorkspaceProvenance(resolvedWorkspace),
     lastScanFingerprint: null,
     lastImportedAt: null,
     lastExportedAt: null,
@@ -356,9 +364,7 @@ async function bootstrapProject(
   const nextState: OpencodeProjectSyncState = opencodeProjectSyncStateSchema.parse({
     ...previousState,
     bootstrapCompletedAt: now,
-    canonicalRepoRoot: resolvedWorkspace.cwd,
-    canonicalRepoUrl: resolvedWorkspace.repoUrl,
-    canonicalRepoRef: resolvedWorkspace.repoRef,
+    ...preserveCanonicalWorkspaceProvenance(resolvedWorkspace),
     lastScanFingerprint: discovery.lastScanFingerprint,
     warnings: discovery.warnings.map((warning) => warning.message),
     conflicts: previousState.conflicts,
@@ -424,9 +430,7 @@ async function syncProject(
   if (plan.conflicts.length > 0) {
     const nextState = opencodeProjectSyncStateSchema.parse({
       ...previousState,
-      canonicalRepoRoot: resolvedWorkspace.cwd,
-      canonicalRepoUrl: resolvedWorkspace.repoUrl,
-      canonicalRepoRef: resolvedWorkspace.repoRef,
+      ...preserveCanonicalWorkspaceProvenance(resolvedWorkspace),
       lastScanFingerprint: discovery.lastScanFingerprint,
       warnings: plan.warnings,
       conflicts: plan.conflicts,
@@ -522,9 +526,7 @@ async function finalizeSyncProject(
   const nextState = opencodeProjectSyncStateSchema.parse({
     ...previousState,
     bootstrapCompletedAt: previousState.bootstrapCompletedAt ?? input.importedAt,
-    canonicalRepoRoot: resolvedWorkspace.cwd,
-    canonicalRepoUrl: resolvedWorkspace.repoUrl,
-    canonicalRepoRef: resolvedWorkspace.repoRef,
+    ...preserveCanonicalWorkspaceProvenance(resolvedWorkspace),
     lastScanFingerprint: input.lastScanFingerprint,
     lastImportedAt: input.importedAt,
     importedAgents: selectedImportedAgentsFromFinalizeInput(input, resolvedWorkspace, discovery, previousState),

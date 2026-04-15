@@ -50,6 +50,31 @@ describe("opencode project package schemas", () => {
     expect(result.success).toBe(true);
   });
 
+  it("keeps planned agent adapter config narrow and bound to opencode_full", () => {
+    const result = opencodeProjectFinalizeSyncInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      importedAt: "2026-04-11T12:00:00.000Z",
+      lastScanFingerprint: "abc123",
+      selectedAgentKeys: ["researcher"],
+      warnings: [],
+      agentUpserts: [{
+        operation: "create",
+        paperclipAgentId: null,
+        externalAgentKey: "researcher",
+        repoRelPath: ".opencode/agents/researcher.md",
+        fingerprint: "fp",
+        executionMode: "remote_server",
+      }],
+      appliedAgents: [{
+        externalAgentKey: "researcher",
+        paperclipAgentId: "33333333-3333-4333-8333-333333333333",
+      }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("enforces top-level preview and agent-only conflict vocabulary", () => {
     expect(opencodeTopLevelAgentPreviewSchema.safeParse({
       lastScanFingerprint: "abc",
@@ -172,6 +197,34 @@ describe("opencode project package schemas", () => {
       importedAgents: [],
       warnings: [],
       conflicts: [],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects extra persisted sync identity fields beyond canonical workspace provenance", () => {
+    const result = opencodeProjectSyncStateSchema.safeParse({
+      projectId: "11111111-1111-4111-8111-111111111111",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      canonicalRepoRoot: "/repos/canonical",
+      canonicalRepoUrl: null,
+      canonicalRepoRef: null,
+      bootstrapCompletedAt: null,
+      lastScanFingerprint: null,
+      lastImportedAt: null,
+      lastExportedAt: null,
+      manifestVersion: 2,
+      syncPolicy: {
+        mode: "top_level_agents_only",
+        syncSkills: false,
+        importRootAgentsMd: false,
+        importNestedAgents: false,
+      },
+      selectedAgents: [],
+      importedAgents: [],
+      warnings: [],
+      conflicts: [],
+      remoteBaseUrl: "https://example.com/opencode",
     });
 
     expect(result.success).toBe(false);

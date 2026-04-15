@@ -218,6 +218,13 @@ function getAgentDepth(repoRelPath: string): number {
   return relative.split("/").length;
 }
 
+function isTopLevelAgentMarkdown(repoRelPath: string): boolean {
+  const normalized = normalizeSlashes(repoRelPath);
+  return normalized.startsWith(`${AGENT_ROOT}/`)
+    && normalized.toLowerCase().endsWith(".md")
+    && getAgentDepth(normalized) === 1;
+}
+
 function getAdvisoryMode(attributes: Record<string, unknown>): "primary" | "subagent" | null {
   const raw = attributes.mode;
   if (raw === "primary" || raw === "subagent") return raw;
@@ -375,8 +382,7 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
       });
     }
 
-    const depth = getAgentDepth(repoRelPath);
-    if (depth === 1) {
+    if (isTopLevelAgentMarkdown(repoRelPath)) {
       const fingerprint = sha256(repoRelPath, instructionsMarkdown);
       const existing = eligibleAgentsByKey.get(externalAgentKey);
       if (existing && existing.repoRelPath !== repoRelPath) {
@@ -406,11 +412,14 @@ export function discoverOpencodeProjectFiles(input: { repoRoot: string }): Disco
       continue;
     }
 
-    nestedAgents.push({
-      externalAgentKey,
-      displayName,
-      repoRelPath,
-    });
+    const depth = getAgentDepth(repoRelPath);
+    if (depth > 1) {
+      nestedAgents.push({
+        externalAgentKey,
+        displayName,
+        repoRelPath,
+      });
+    }
   }
 
   const orderedFiles = [...supportedFiles].sort((left, right) => left.localeCompare(right));

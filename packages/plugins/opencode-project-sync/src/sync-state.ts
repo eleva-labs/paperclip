@@ -16,7 +16,7 @@ export const opencodeProjectRuntimeTestResultSchema = z.object({
   ok: z.boolean(),
   message: z.string().min(1),
   details: z.record(z.string(), z.unknown()).optional(),
-});
+}).strict();
 
 export const opencodeProjectSyncStateSchema = z.object({
   projectId: z.string().uuid(),
@@ -34,6 +34,6 @@ export const opencodeProjectSyncStateSchema = z.object({
   importedAgents: z.array(opencodeProjectSyncManifestAgentSchema),
   warnings: z.array(z.string()),
   conflicts: z.array(opencodeProjectConflictSchema),
-});
+}).strict();
 
 export type OpencodeProjectSyncState = z.infer<typeof opencodeProjectSyncStateSchema>;

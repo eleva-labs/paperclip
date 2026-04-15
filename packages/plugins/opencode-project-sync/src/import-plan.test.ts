@@ -63,7 +63,7 @@ describe("buildImportPlan", () => {
         name: "Researcher",
         title: null,
         reportsTo: null,
-        adapterType: "opencode_project_local",
+        adapterType: "opencode_full",
         adapterConfig: { model: "openai/gpt-5.4" },
         metadata: {
           syncManaged: true,
@@ -109,12 +109,13 @@ describe("buildImportPlan", () => {
         paperclipAgentId: "agent-1",
         matchBasis: "manifest_link",
         payload: expect.objectContaining({
-          adapterType: "opencode_project_local",
+          adapterType: "opencode_full",
           reportsTo: null,
           adapterConfig: expect.objectContaining({
+            executionMode: "local_cli",
             model: "openai/gpt-5.4",
-            allowProjectConfig: true,
-            syncPluginKey: "paperclip-opencode-project",
+            promptTemplate: "# Researcher\n",
+            localCli: expect.objectContaining({ allowProjectConfig: true }),
           }),
           metadata: expect.objectContaining({
             importRole: "facade_entrypoint",
@@ -189,7 +190,7 @@ describe("buildImportPlan", () => {
           name: "Researcher",
           title: "Lead researcher",
           reportsTo: null,
-          adapterType: "opencode_project_local",
+          adapterType: "opencode_full",
           adapterConfig: { model: "openai/gpt-5.4" },
           metadata: {
             syncManaged: true,
@@ -216,7 +217,7 @@ describe("buildImportPlan", () => {
           name: "Writer",
           title: "Writer",
           reportsTo: null,
-          adapterType: "opencode_project_local",
+          adapterType: "opencode_full",
           adapterConfig: { promptTemplate: "# Writer\n" },
           metadata: null,
         },
@@ -280,13 +281,13 @@ describe("buildImportPlan", () => {
       selectedAgentKeys: ["researcher"],
       importedAt,
       existingState: state,
-      existingAgents: [{
-        id: "agent-1",
-        name: "Researcher",
-        title: null,
-        reportsTo: null,
-        adapterType: "opencode_project_local",
-        adapterConfig: {},
+        existingAgents: [{
+          id: "agent-1",
+          name: "Researcher",
+          title: null,
+          reportsTo: null,
+          adapterType: "opencode_full",
+          adapterConfig: {},
         metadata: {
           syncManaged: true,
           sourceSystem: "opencode_project_repo",
@@ -359,8 +360,8 @@ describe("buildImportPlan", () => {
       importedAt,
       existingState: makeState(),
       existingAgents: [
-        { id: "agent-1", name: "Researcher", title: null, reportsTo: null, adapterType: "opencode_project_local", adapterConfig: {}, metadata: managedMetadata },
-        { id: "agent-2", name: "Researcher Duplicate", title: null, reportsTo: null, adapterType: "opencode_project_local", adapterConfig: {}, metadata: managedMetadata },
+        { id: "agent-1", name: "Researcher", title: null, reportsTo: null, adapterType: "opencode_full", adapterConfig: {}, metadata: managedMetadata },
+        { id: "agent-2", name: "Researcher Duplicate", title: null, reportsTo: null, adapterType: "opencode_full", adapterConfig: {}, metadata: managedMetadata },
       ],
       discovery: {
         warnings: [],
@@ -429,7 +430,7 @@ describe("buildImportPlan", () => {
         name: "Orchestrator",
         title: null,
         reportsTo: null,
-        adapterType: "opencode_project_local",
+        adapterType: "opencode_full",
         adapterConfig: { model: "anthropic/claude-sonnet-4" },
         metadata: {
           syncManaged: true,
@@ -515,7 +516,7 @@ describe("buildImportPlan", () => {
         name: "Orchestrator",
         title: null,
         reportsTo: null,
-        adapterType: "opencode_project_local",
+        adapterType: "opencode_full",
         adapterConfig: { model: "anthropic/claude-sonnet-4" },
         metadata: {
           syncManaged: true,
@@ -571,7 +572,7 @@ describe("buildImportPlan", () => {
         name: "Orchestrator",
         title: null,
         reportsTo: null,
-        adapterType: "opencode_project_local",
+        adapterType: "opencode_full",
         adapterConfig: { model: "anthropic/claude-sonnet-4" },
         metadata: {
           syncManaged: true,
@@ -633,7 +634,7 @@ describe("buildImportPlan", () => {
         name: "Orchestrator",
         title: null,
         reportsTo: null,
-        adapterType: "opencode_project_local",
+        adapterType: "opencode_full",
         adapterConfig: { model: "invalidmodel" },
         metadata: {
           syncManaged: true,
@@ -709,5 +710,83 @@ describe("buildImportPlan", () => {
 
     expect(plan.warnings).toContain(".opencode/agents/orchestrator.md: Frontmatter field 'model' must use provider/model format; the declared value will be ignored during sync.");
     expect(plan.agentUpserts[0]?.payload.adapterConfig.model).toBe(DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL);
+  });
+
+  it("preserves shared opencode_full remote config without making runtime baseUrl identity", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [{
+        id: "agent-1",
+        name: "Orchestrator",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_full",
+        adapterConfig: {
+          executionMode: "remote_server",
+          model: "openai/gpt-5.4",
+          remoteServer: {
+            baseUrl: "https://example.com/opencode",
+            auth: { mode: "none" },
+            projectTarget: { mode: "fixed_path", projectPath: "/tmp/old" },
+          },
+        },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/orchestrator.md`,
+          externalAgentKey: "orchestrator",
+          externalAgentName: "Orchestrator",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]).toEqual(expect.objectContaining({
+      payload: expect.objectContaining({
+        adapterType: "opencode_full",
+        adapterConfig: expect.objectContaining({
+          executionMode: "remote_server",
+          model: "openai/gpt-5.4",
+          promptTemplate: "# Orchestrator\n",
+          remoteServer: expect.objectContaining({
+            baseUrl: "https://example.com/opencode",
+            auth: { mode: "none" },
+            projectTarget: { mode: "server_default" },
+          }),
+        }),
+      }),
+    }));
   });
 });

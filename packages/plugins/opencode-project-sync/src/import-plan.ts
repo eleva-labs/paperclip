@@ -8,6 +8,8 @@ import type {
 import { importedOpencodeAgentMetadataSchema } from "./schemas.js";
 import type { DiscoveredRepoAgent, DiscoveryWarning } from "./discovery.js";
 
+const DEFAULT_OPENCODE_FULL_EXECUTION_MODE = "local_cli" as const;
+
 export type MinimalPaperclipAgent = {
   id: string;
   name: string;
@@ -146,6 +148,64 @@ function resolveImportedAgentModel(input: {
     ?? DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function buildImportedAgentAdapterConfig(input: {
+  discoveredAgent: DiscoveredRepoAgent;
+  existing: MinimalPaperclipAgent | null;
+  resolvedModel: string;
+}): Record<string, unknown> {
+  const existingConfig = asRecord(input.existing?.adapterConfig) ?? {};
+  const executionMode = existingConfig.executionMode === "remote_server"
+    || existingConfig.executionMode === "local_sdk"
+    || existingConfig.executionMode === "local_cli"
+    ? existingConfig.executionMode
+    : DEFAULT_OPENCODE_FULL_EXECUTION_MODE;
+
+  const baseConfig: Record<string, unknown> = {
+    executionMode,
+    model: input.resolvedModel,
+    promptTemplate: input.discoveredAgent.instructionsMarkdown,
+  };
+
+  for (const key of [
+    "variant",
+    "bootstrapPromptTemplate",
+    "timeoutSec",
+    "connectTimeoutSec",
+    "eventStreamIdleTimeoutSec",
+    "failFastWhenUnavailable",
+  ]) {
+    if (key in existingConfig) {
+      baseConfig[key] = existingConfig[key];
+    }
+  }
+
+  if (executionMode === "remote_server") {
+    const remoteServer = asRecord(existingConfig.remoteServer) ?? {};
+    baseConfig.remoteServer = {
+      ...remoteServer,
+      auth: asRecord(remoteServer.auth) ?? { mode: "none" },
+      projectTarget: { mode: "server_default" },
+    };
+    return baseConfig;
+  }
+
+  if (executionMode === "local_sdk") {
+    baseConfig.localSdk = asRecord(existingConfig.localSdk) ?? {};
+    return baseConfig;
+  }
+
+  baseConfig.localCli = {
+    allowProjectConfig: true,
+    ...asRecord(existingConfig.localCli),
+  };
+  return baseConfig;
+}
+
 export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
   const conflicts = createConflictsFromDiscoveryWarnings(input.discovery.warnings);
   const warnings = input.discovery.warnings
@@ -275,14 +335,12 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
         name: discoveredAgent.displayName || toTitle(discoveredAgent.externalAgentKey),
         title: discoveredAgent.role ?? null,
         reportsTo: null,
-        adapterType: existing?.adapterType ?? "opencode_project_local",
-        adapterConfig: {
-          ...(existing?.adapterConfig ?? {}),
-          model: resolvedModel,
-          allowProjectConfig: true,
-          syncPluginKey: "paperclip-opencode-project",
-          promptTemplate: discoveredAgent.instructionsMarkdown,
-        },
+        adapterType: "opencode_full",
+        adapterConfig: buildImportedAgentAdapterConfig({
+          discoveredAgent,
+          existing,
+          resolvedModel,
+        }),
         metadata,
       },
     });

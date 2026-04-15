@@ -58,6 +58,25 @@ describe("discoverOpencodeProjectFiles", () => {
     ]);
   });
 
+  it("keeps sync eligibility limited to top-level markdown agents only", () => {
+    const repoRoot = makeTempRepo();
+    writeFile(repoRoot, ".opencode/agents/orchestrator.md", "# Orchestrator\n");
+    writeFile(repoRoot, ".opencode/agents/nested/analyst.md", "# Analyst\n");
+    writeFile(repoRoot, ".opencode/agents/helper.txt", "helper\n");
+
+    const result = discoverOpencodeProjectFiles({ repoRoot });
+
+    expect(result.eligibleAgents.map((agent) => agent.repoRelPath)).toEqual([
+      ".opencode/agents/orchestrator.md",
+    ]);
+    expect(result.ineligibleNestedAgents.map((agent) => agent.repoRelPath)).toEqual([
+      ".opencode/agents/nested/analyst.md",
+    ]);
+    expect(result.ignoredArtifacts).toEqual(expect.arrayContaining([
+      { kind: "other", repoRelPath: ".opencode/agents/helper.txt" },
+    ]));
+  });
+
   it("ignores root AGENTS and skill artifacts for import planning while surfacing them", () => {
     const repoRoot = makeTempRepo();
     writeFile(repoRoot, "AGENTS.md", "# Repository Guide\n");

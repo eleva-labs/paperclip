@@ -10,7 +10,7 @@ export const opencodeProjectSyncPolicySchema = z.object({
   syncSkills: z.literal(false),
   importRootAgentsMd: z.literal(false),
   importNestedAgents: z.literal(false),
-});
+}).strict();
 
 export const opencodeEligibleAgentSchema = z.object({
   externalAgentKey: z.string().min(1),
@@ -22,19 +22,19 @@ export const opencodeEligibleAgentSchema = z.object({
   selectionDefault: z.boolean(),
   frontmatter: z.object({
     model: z.string().min(1).nullable(),
-  }),
-});
+  }).strict(),
+}).strict();
 
 export const opencodeIneligibleNestedAgentSchema = z.object({
   externalAgentKey: z.string().min(1),
   displayName: z.string().min(1),
   repoRelPath: z.string().min(1),
-});
+}).strict();
 
 export const opencodeIgnoredArtifactSchema = z.object({
   kind: z.enum(["skill", "root_agents_md", "other"]),
   repoRelPath: z.string().min(1),
-});
+}).strict();
 
 export const opencodeTopLevelAgentPreviewSchema = z.object({
   lastScanFingerprint: z.string().min(1),
@@ -42,14 +42,14 @@ export const opencodeTopLevelAgentPreviewSchema = z.object({
   ineligibleNestedAgents: z.array(opencodeIneligibleNestedAgentSchema),
   ignoredArtifacts: z.array(opencodeIgnoredArtifactSchema),
   warnings: z.array(z.string()),
-});
+}).strict();
 
 export const opencodeSelectedAgentSchema = z.object({
   externalAgentKey: z.string().min(1),
   repoRelPath: z.string().min(1),
   fingerprint: z.string().min(1),
   selectedAt: z.string().datetime(),
-});
+}).strict();
 
 export const opencodeLegacyOutOfScopeEntitySchema = z.object({
   entityType: z.enum(["agent", "skill"]),
@@ -103,7 +103,69 @@ export const opencodeProjectConflictSchema = z.object({
   repoRelPath: z.string().min(1).nullable(),
   entityType: z.enum(["agent", "workspace"]).nullable(),
   entityKey: z.string().min(1).nullable(),
-});
+}).strict();
+
+export const opencodeImportedAgentRemoteAuthSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("none") }).strict(),
+  z.object({ mode: z.literal("bearer"), token: z.unknown() }).strict(),
+  z.object({ mode: z.literal("basic"), username: z.string().min(1), password: z.unknown() }).strict(),
+  z.object({ mode: z.literal("header"), headerName: z.string().min(1), headerValue: z.unknown() }).strict(),
+]);
+
+export const opencodeImportedAgentAdapterConfigSchema = z.discriminatedUnion("executionMode", [
+  z.object({
+    executionMode: z.literal("local_cli"),
+    model: z.string().min(1),
+    variant: z.string().min(1).optional(),
+    promptTemplate: z.string(),
+    bootstrapPromptTemplate: z.string().optional(),
+    timeoutSec: z.number().int().positive().optional(),
+    connectTimeoutSec: z.number().int().positive().optional(),
+    eventStreamIdleTimeoutSec: z.number().int().positive().optional(),
+    failFastWhenUnavailable: z.boolean().optional(),
+    localCli: z.object({
+      command: z.string().min(1).optional(),
+      allowProjectConfig: z.boolean().optional(),
+      dangerouslySkipPermissions: z.boolean().optional(),
+      graceSec: z.number().int().nonnegative().optional(),
+      env: z.record(z.string(), z.unknown()).optional(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    executionMode: z.literal("remote_server"),
+    model: z.string().min(1),
+    variant: z.string().min(1).optional(),
+    promptTemplate: z.string(),
+    bootstrapPromptTemplate: z.string().optional(),
+    timeoutSec: z.number().int().positive().optional(),
+    connectTimeoutSec: z.number().int().positive().optional(),
+    eventStreamIdleTimeoutSec: z.number().int().positive().optional(),
+    failFastWhenUnavailable: z.boolean().optional(),
+    remoteServer: z.object({
+      baseUrl: z.string().min(1),
+      auth: opencodeImportedAgentRemoteAuthSchema.optional(),
+      healthTimeoutSec: z.number().int().positive().optional(),
+      requireHealthyServer: z.boolean().optional(),
+      projectTarget: z.object({ mode: z.literal("server_default") }).strict().optional(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    executionMode: z.literal("local_sdk"),
+    model: z.string().min(1),
+    variant: z.string().min(1).optional(),
+    promptTemplate: z.string(),
+    bootstrapPromptTemplate: z.string().optional(),
+    timeoutSec: z.number().int().positive().optional(),
+    connectTimeoutSec: z.number().int().positive().optional(),
+    eventStreamIdleTimeoutSec: z.number().int().positive().optional(),
+    failFastWhenUnavailable: z.boolean().optional(),
+    localSdk: z.object({
+      sdkProviderHint: z.string().min(1).optional(),
+      allowProjectConfig: z.boolean().optional(),
+      env: z.record(z.string(), z.unknown()).optional(),
+    }).strict(),
+  }).strict(),
+]);
 
 export const importedOpencodeFacadeAgentMetadataSchema = z.object({
   syncManaged: z.literal(true),
@@ -127,7 +189,7 @@ export const importedOpencodeFacadeAgentMetadataSchema = z.object({
   lastImportedAt: z.string().datetime().nullable(),
   lastExportedFingerprint: z.string().min(1).nullable(),
   lastExportedAt: z.string().datetime().nullable(),
-});
+}).strict();
 
 export const importedOpencodeAgentMetadataSchema = importedOpencodeFacadeAgentMetadataSchema;
 
@@ -161,11 +223,11 @@ export const opencodeProjectPlannedAgentUpsertSchema = z.object({
     name: z.string().min(1),
     title: z.string().min(1).nullable(),
     reportsTo: z.null(),
-    adapterType: z.string().min(1),
-    adapterConfig: z.record(z.string(), z.unknown()),
+    adapterType: z.literal("opencode_full"),
+    adapterConfig: opencodeImportedAgentAdapterConfigSchema,
     metadata: importedOpencodeFacadeAgentMetadataSchema,
-  }),
-});
+  }).strict(),
+}).strict();
 
 export const opencodeProjectSyncPlanResultSchema = z.object({
   ok: z.literal(true),
@@ -189,7 +251,7 @@ export const opencodeProjectAppliedSkillResultSchema = z.array(z.never()).max(0)
 export const opencodeProjectAppliedAgentResultSchema = z.object({
   externalAgentKey: z.string().min(1),
   paperclipAgentId: z.string().uuid(),
-});
+}).strict();
 
 export const opencodeProjectFinalizeSyncInputSchema = z.object({
   companyId: z.string().uuid(),
@@ -205,9 +267,9 @@ export const opencodeProjectFinalizeSyncInputSchema = z.object({
     externalAgentKey: z.string().min(1),
     repoRelPath: z.string().min(1),
     fingerprint: z.string().min(1),
-  })),
+  }).strict()),
   appliedAgents: z.array(opencodeProjectAppliedAgentResultSchema),
-});
+}).strict();
 
 export const opencodeProjectSyncManifestAgentSchema = z.object({
   paperclipAgentId: z.string().uuid(),
@@ -219,7 +281,7 @@ export const opencodeProjectSyncManifestAgentSchema = z.object({
   lastImportedAt: z.string().datetime().nullable(),
   lastExportedFingerprint: z.string().min(1).nullable(),
   lastExportedAt: z.string().datetime().nullable(),
-});
+}).strict();
 
 export const opencodeProjectSyncManifestSkillSchema = z.object({
   paperclipSkillId: z.string().uuid(),
