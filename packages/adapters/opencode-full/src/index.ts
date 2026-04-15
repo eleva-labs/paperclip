@@ -2,7 +2,7 @@ import type { ServerAdapterModule } from "@paperclipai/adapter-utils";
 import {
   execute,
   getConfigSchema,
-  listOpenCodeFullModels,
+  listModels,
   sessionCodec,
   testEnvironment,
 } from "./server/index.js";
@@ -10,9 +10,9 @@ import {
 export const type = "opencode_full";
 export const label = "OpenCode (full)";
 
-export const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
+const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
 
-export const models: Array<{ id: string; label: string }> = [
+const models: Array<{ id: string; label: string }> = [
   { id: DEFAULT_OPENCODE_FULL_MODEL, label: DEFAULT_OPENCODE_FULL_MODEL },
   { id: "openai/gpt-5.2-codex", label: "openai/gpt-5.2-codex" },
   { id: "openai/gpt-5.2", label: "openai/gpt-5.2" },
@@ -35,7 +35,7 @@ Design rules:
 - runtime execution consumes only runtime-resolved remote auth values
 - remote resume is gated by ownership, config fingerprint, base URL, target mode, and resolved target identity
 
-Cycle 4.1 note:
+Runtime scope note:
 - local_cli remains the parity baseline
 - remote_server execution is implemented only for the proven-safe server_default target
 - paperclip_workspace, server_managed_namespace, and fixed_path remain deferred or unsupported
@@ -49,7 +49,7 @@ export function createServerAdapter(): ServerAdapterModule {
     testEnvironment,
     sessionCodec,
     models,
-    listModels: listOpenCodeFullModels,
+    listModels,
     agentConfigurationDoc,
     detectModel: async () => null,
     getConfigSchema,

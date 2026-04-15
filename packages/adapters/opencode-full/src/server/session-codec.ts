@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
-import { opencodeFullRuntimeConfigSchema } from "./config-schema.js";
+import { opencodeFullRuntimeConfigSchema } from "./runtime-schema.js";
 import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
 
 function readNonEmptyString(value: unknown): string | null {
@@ -22,6 +23,51 @@ function stableNormalize(value: unknown): unknown {
     }, {});
 }
 
+function hashValue(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(stableNormalize(value)))
+    .digest("hex");
+}
+
+function sanitizeConfigForFingerprint(config: z.infer<typeof opencodeFullRuntimeConfigSchema>): unknown {
+  if (config.executionMode !== "remote_server") {
+    return stableNormalize(config);
+  }
+
+  const remoteServer = config.remoteServer;
+  const auth = (() => {
+    switch (remoteServer.auth.mode) {
+      case "none":
+        return { mode: "none" };
+      case "bearer":
+        return {
+          mode: "bearer",
+          tokenDigest: hashValue(remoteServer.auth.token),
+        };
+      case "basic":
+        return {
+          mode: "basic",
+          username: remoteServer.auth.username,
+          passwordDigest: hashValue(remoteServer.auth.password),
+        };
+      case "header":
+        return {
+          mode: "header",
+          headerName: remoteServer.auth.headerName,
+          headerValueDigest: hashValue(remoteServer.auth.headerValue),
+        };
+    }
+  })();
+
+  return stableNormalize({
+    ...config,
+    remoteServer: {
+      ...remoteServer,
+      auth,
+    },
+  });
+}
+
 /**
  * Deterministic fingerprint for remote/session isolation.
  *
@@ -31,39 +77,53 @@ function stableNormalize(value: unknown): unknown {
  */
 export function getConfigFingerprint(rawConfig: unknown): string {
   const config = opencodeFullRuntimeConfigSchema.parse(rawConfig);
-  const normalized = stableNormalize(config);
-  return JSON.stringify(normalized);
+  return hashValue(sanitizeConfigForFingerprint(config));
 }
 
 export const opencodeFullSessionOwnershipSchema = z.object({
   companyId: z.string().min(1),
   agentId: z.string().min(1),
   adapterType: z.literal("opencode_full"),
-  executionMode: z.enum(["local_cli", "remote_server", "local_sdk"]),
   configFingerprint: z.string().min(1),
 });
 
-export const opencodeFullRemoteSessionParamsSchema = z.object({
-  ownership: opencodeFullSessionOwnershipSchema.extend({
-    executionMode: z.literal("remote_server"),
-  }),
-  baseUrl: z.string().url(),
-  remoteSessionId: z.string().min(1),
-  projectTargetMode: z.enum([
-    "server_default",
-    "paperclip_workspace",
-    "server_managed_namespace",
-    "fixed_path",
-  ]),
-  resolvedTargetIdentity: z.string().min(1),
-  canonicalWorkspaceId: z.string().min(1).nullable(),
-  canonicalWorkspaceCwd: z.string().min(1).nullable(),
-  serverScope: z.enum(["shared", "dedicated_single_company", "unknown"]),
-  createdAt: z.string().datetime(),
+export const opencodeFullLocalCliSessionParamsSchema = z.object({
+  executionMode: z.literal("local_cli"),
+  sessionId: z.string().min(1),
+  cwd: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
+  repoUrl: z.string().min(1).optional(),
+  repoRef: z.string().min(1).optional(),
 });
 
+export const opencodeFullRemoteSessionParamsSchema = z.object({
+  executionMode: z.literal("remote_server"),
+  sessionId: z.string().min(1),
+  remoteSessionId: z.string().min(1).optional(),
+  companyId: z.string().min(1),
+  agentId: z.string().min(1),
+  adapterType: z.literal("opencode_full"),
+  configFingerprint: z.string().min(1),
+  ownership: opencodeFullSessionOwnershipSchema.extend({
+    executionMode: z.literal("remote_server"),
+  }).optional(),
+  baseUrl: z.string().url(),
+  projectTargetMode: z.literal("server_default"),
+  resolvedTargetIdentity: z.string().min(1),
+});
+
+export const opencodeFullSessionParamsSchema = z.discriminatedUnion("executionMode", [
+  opencodeFullLocalCliSessionParamsSchema,
+  opencodeFullRemoteSessionParamsSchema,
+]);
+
 export type OpencodeFullRemoteSessionParams = z.infer<typeof opencodeFullRemoteSessionParamsSchema>;
+export type OpencodeFullSessionParams = z.infer<typeof opencodeFullSessionParamsSchema>;
 export type OpencodeFullSessionOwnership = z.infer<typeof opencodeFullSessionOwnershipSchema>;
+
+function normalizeResolvedTargetIdentity(value: string): string {
+  return value.trim();
+}
 
 export function createRemoteSessionOwnership(input: {
   companyId: string;
@@ -75,7 +135,6 @@ export function createRemoteSessionOwnership(input: {
     companyId: input.companyId,
     agentId: input.agentId,
     adapterType: "opencode_full",
-    executionMode: config.executionMode,
     configFingerprint: getConfigFingerprint(config),
   };
 }
@@ -101,18 +160,20 @@ export function createRemoteSessionParams(input: {
   }
 
   return {
+    executionMode: "remote_server",
+    sessionId: input.remoteSessionId,
+    remoteSessionId: input.remoteSessionId,
+    companyId: input.companyId,
+    agentId: input.agentId,
+    adapterType: "opencode_full",
+    configFingerprint: createRemoteSessionOwnership(input).configFingerprint,
     ownership: {
       ...createRemoteSessionOwnership(input),
       executionMode: "remote_server",
     },
     baseUrl: config.remoteServer.baseUrl,
-    remoteSessionId: input.remoteSessionId,
     projectTargetMode: target.targetMode,
-    resolvedTargetIdentity: target.resolvedTargetIdentity,
-    canonicalWorkspaceId: input.canonicalWorkspaceId ?? null,
-    canonicalWorkspaceCwd: input.canonicalWorkspaceCwd ?? null,
-    serverScope: input.serverScope ?? "unknown",
-    createdAt: input.createdAt ?? new Date().toISOString(),
+    resolvedTargetIdentity: normalizeResolvedTargetIdentity(target.resolvedTargetIdentity),
   };
 }
 
@@ -123,9 +184,11 @@ export function canResumeRemoteSession(input: {
   sessionParams: unknown;
 }): { ok: true } | { ok: false; reason: string } {
   const config = opencodeFullRuntimeConfigSchema.parse(input.config);
-  const session = opencodeFullRemoteSessionParamsSchema.safeParse(input.sessionParams);
+  const session = opencodeFullSessionParamsSchema.safeParse(input.sessionParams);
 
-  if (!session.success) return { ok: false, reason: "invalid_remote_session_params" };
+  if (!session.success || session.data.executionMode !== "remote_server") {
+    return { ok: false, reason: "invalid_remote_session_params" };
+  }
   if (config.executionMode !== "remote_server") return { ok: false, reason: "execution_mode_mismatch" };
 
   const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
@@ -133,14 +196,14 @@ export function canResumeRemoteSession(input: {
 
   const expectedFingerprint = getConfigFingerprint(config);
   const checks: Array<[boolean, string]> = [
-    [session.data.ownership.companyId === input.companyId, "company_id_mismatch"],
-    [session.data.ownership.agentId === input.agentId, "agent_id_mismatch"],
-    [session.data.ownership.adapterType === "opencode_full", "adapter_type_mismatch"],
-    [session.data.ownership.executionMode === "remote_server", "execution_mode_mismatch"],
-    [session.data.ownership.configFingerprint === expectedFingerprint, "config_fingerprint_mismatch"],
+    [session.data.companyId === input.companyId, "company_id_mismatch"],
+    [session.data.agentId === input.agentId, "agent_id_mismatch"],
+    [session.data.adapterType === "opencode_full", "adapter_type_mismatch"],
+    [session.data.executionMode === "remote_server", "execution_mode_mismatch"],
     [session.data.baseUrl === config.remoteServer.baseUrl, "base_url_mismatch"],
+    [session.data.configFingerprint === expectedFingerprint, "config_fingerprint_mismatch"],
     [session.data.projectTargetMode === target.targetMode, "target_mode_mismatch"],
-    [session.data.resolvedTargetIdentity === target.resolvedTargetIdentity, "resolved_target_identity_mismatch"],
+    [session.data.resolvedTargetIdentity === normalizeResolvedTargetIdentity(target.resolvedTargetIdentity), "resolved_target_identity_mismatch"],
   ];
 
   for (const [ok, reason] of checks) {
@@ -172,36 +235,65 @@ export function shouldStartFreshRemoteSession(input: {
 }
 
 export const sessionCodec = {
-  deserialize(raw: unknown): Record<string, unknown> | null {
+  deserialize(raw: unknown): OpencodeFullSessionParams | null {
     if (!isRecord(raw)) return null;
+    const ownership = isRecord(raw.ownership) ? raw.ownership : {};
+    const inferredExecutionMode =
+      readNonEmptyString(raw.executionMode) ??
+      readNonEmptyString(ownership.executionMode) ??
+      (readNonEmptyString(raw.remoteSessionId) || readNonEmptyString(raw.remote_session_id)
+        ? "remote_server"
+        : null);
 
-    const remoteSessionId =
+    const sessionId =
+      readNonEmptyString(raw.sessionId) ??
       readNonEmptyString(raw.remoteSessionId) ??
-      readNonEmptyString(raw.remote_session_id) ??
-      readNonEmptyString(raw.sessionId);
-    if (!remoteSessionId) return null;
+      readNonEmptyString(raw.remote_session_id);
+    if (!sessionId) return null;
+
+    const local = opencodeFullLocalCliSessionParamsSchema.safeParse({
+      executionMode: inferredExecutionMode,
+      sessionId,
+      cwd: raw.cwd ?? raw.workdir ?? raw.folder,
+      workspaceId: raw.workspaceId,
+      repoUrl: raw.repoUrl,
+      repoRef: raw.repoRef,
+    });
+    if (local.success) return local.data;
 
     const parsed = opencodeFullRemoteSessionParamsSchema.safeParse({
-      ownership: raw.ownership,
+      executionMode: inferredExecutionMode,
+      sessionId,
+      remoteSessionId: raw.remoteSessionId ?? raw.remote_session_id ?? sessionId,
+      companyId: raw.companyId ?? ownership.companyId,
+      agentId: raw.agentId ?? ownership.agentId,
+      adapterType: raw.adapterType ?? ownership.adapterType,
+      configFingerprint: raw.configFingerprint ?? ownership.configFingerprint,
+      ownership: Object.keys(ownership).length > 0
+        ? {
+            companyId: raw.companyId ?? ownership.companyId,
+            agentId: raw.agentId ?? ownership.agentId,
+            adapterType: raw.adapterType ?? ownership.adapterType,
+            executionMode: "remote_server",
+            configFingerprint: raw.configFingerprint ?? ownership.configFingerprint,
+          }
+        : undefined,
       baseUrl: raw.baseUrl,
-      remoteSessionId,
       projectTargetMode: raw.projectTargetMode,
-      resolvedTargetIdentity: raw.resolvedTargetIdentity,
-      canonicalWorkspaceId: raw.canonicalWorkspaceId ?? null,
-      canonicalWorkspaceCwd: raw.canonicalWorkspaceCwd ?? null,
-      serverScope: raw.serverScope,
-      createdAt: raw.createdAt,
+      resolvedTargetIdentity: typeof raw.resolvedTargetIdentity === "string"
+        ? normalizeResolvedTargetIdentity(raw.resolvedTargetIdentity)
+        : raw.resolvedTargetIdentity,
     });
 
     return parsed.success ? parsed.data : null;
   },
-  serialize(params: Record<string, unknown> | null): Record<string, unknown> | null {
+  serialize(params: Record<string, unknown> | null): OpencodeFullSessionParams | null {
     if (!params) return null;
-    const parsed = opencodeFullRemoteSessionParamsSchema.safeParse(params);
+    const parsed = opencodeFullSessionParamsSchema.safeParse(params);
     return parsed.success ? parsed.data : null;
   },
   getDisplayId(params: Record<string, unknown> | null): string | null {
     if (!params) return null;
-    return readNonEmptyString(params.remoteSessionId) ?? readNonEmptyString(params.sessionId);
+    return readNonEmptyString(params.sessionId);
   },
 };

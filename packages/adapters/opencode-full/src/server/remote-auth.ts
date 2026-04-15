@@ -1,4 +1,5 @@
-import { opencodeFullRemoteAuthPersistedSchema, opencodeFullRemoteAuthRuntimeSchema } from "./config-schema.js";
+import { opencodeFullRemoteAuthPersistedSchema } from "./config-schema.js";
+import { opencodeFullRemoteAuthRuntimeSchema } from "./runtime-schema.js";
 
 export { opencodeFullRemoteAuthPersistedSchema, opencodeFullRemoteAuthRuntimeSchema };
 

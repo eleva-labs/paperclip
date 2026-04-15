@@ -46,7 +46,7 @@ export const opencodeFullRemoteAuthPersistedSchema = z.discriminatedUnion("mode"
   }),
 ]);
 
-export const opencodeFullRemoteProjectTargetSchema = z.object({
+export const opencodeFullRemoteProjectTargetShapeSchema = z.object({
   mode: z.enum([
     "server_default",
     "paperclip_workspace",
@@ -56,11 +56,7 @@ export const opencodeFullRemoteProjectTargetSchema = z.object({
   projectPath: z.string().trim().min(1).optional(),
   namespaceTemplate: z.string().trim().min(1).optional(),
   requireDedicatedServer: z.boolean().default(false),
-}).superRefine((value: {
-  mode: "server_default" | "paperclip_workspace" | "server_managed_namespace" | "fixed_path";
-  projectPath?: string;
-  namespaceTemplate?: string;
-}, ctx: z.RefinementCtx) => {
+}).superRefine((value, ctx) => {
   if (value.mode === "fixed_path" && !value.projectPath) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -74,6 +70,16 @@ export const opencodeFullRemoteProjectTargetSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ["namespaceTemplate"],
       message: "namespaceTemplate is required when mode=server_managed_namespace",
+    });
+  }
+});
+
+export const opencodeFullRemoteProjectTargetSchema = opencodeFullRemoteProjectTargetShapeSchema.superRefine((value, ctx) => {
+  if (value.mode !== "server_default") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["mode"],
+      message: "MVP currently validates only projectTarget.mode=server_default",
     });
   }
 });
@@ -109,91 +115,13 @@ export const opencodeFullPersistedConfigSchema = opencodeFullSharedPersistedConf
   ]),
 );
 
-export const opencodeFullRemoteAuthRuntimeSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("none") }),
-  z.object({
-    mode: z.literal("bearer"),
-    token: z.string().min(1),
-  }),
-  z.object({
-    mode: z.literal("basic"),
-    username: z.string().min(1),
-    password: z.string().min(1),
-  }),
-  z.object({
-    mode: z.literal("header"),
-    headerName: z.string().min(1),
-    headerValue: z.string().min(1),
-  }),
-]);
-
-export const opencodeFullRuntimeConfigSchema = z.discriminatedUnion("executionMode", [
-  z.object({
-    executionMode: z.literal("local_cli"),
-    model: z.string().min(1),
-    variant: z.string().min(1).optional(),
-    promptTemplate: z.string().optional(),
-    bootstrapPromptTemplate: z.string().optional(),
-    timeoutSec: z.number().int().positive(),
-    connectTimeoutSec: z.number().int().positive(),
-    eventStreamIdleTimeoutSec: z.number().int().positive(),
-    failFastWhenUnavailable: z.boolean(),
-    localCli: z.object({
-      command: z.string().min(1),
-      allowProjectConfig: z.boolean(),
-      dangerouslySkipPermissions: z.boolean(),
-      graceSec: z.number().int().nonnegative(),
-      env: z.record(z.string()),
-    }),
-  }),
-  z.object({
-    executionMode: z.literal("remote_server"),
-    model: z.string().min(1),
-    variant: z.string().min(1).optional(),
-    promptTemplate: z.string().optional(),
-    bootstrapPromptTemplate: z.string().optional(),
-    timeoutSec: z.number().int().positive(),
-    connectTimeoutSec: z.number().int().positive(),
-    eventStreamIdleTimeoutSec: z.number().int().positive(),
-    failFastWhenUnavailable: z.boolean(),
-    remoteServer: z.object({
-      baseUrl: z.string().url(),
-      auth: opencodeFullRemoteAuthRuntimeSchema,
-      healthTimeoutSec: z.number().int().positive(),
-      requireHealthyServer: z.boolean(),
-      projectTarget: opencodeFullRemoteProjectTargetSchema,
-    }),
-  }),
-  z.object({
-    executionMode: z.literal("local_sdk"),
-    model: z.string().min(1),
-    variant: z.string().min(1).optional(),
-    promptTemplate: z.string().optional(),
-    bootstrapPromptTemplate: z.string().optional(),
-    timeoutSec: z.number().int().positive(),
-    connectTimeoutSec: z.number().int().positive(),
-    eventStreamIdleTimeoutSec: z.number().int().positive(),
-    failFastWhenUnavailable: z.boolean(),
-    localSdk: z.object({
-      sdkProviderHint: z.string().min(1).optional(),
-      allowProjectConfig: z.boolean(),
-      env: z.record(z.string()),
-    }),
-  }),
-]);
-
 export type OpencodeFullPersistedConfig = z.infer<typeof opencodeFullPersistedConfigSchema>;
-export type OpencodeFullRuntimeConfig = z.infer<typeof opencodeFullRuntimeConfigSchema>;
 export type OpencodeFullExecutionMode = z.infer<typeof opencodeFullExecutionModeSchema>;
 export type OpencodeFullLocalCliPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "local_cli" }>;
 export type OpencodeFullRemoteServerPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "remote_server" }>;
 export type OpencodeFullLocalSdkPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "local_sdk" }>;
-export type OpencodeFullLocalCliRuntimeConfig = Extract<OpencodeFullRuntimeConfig, { executionMode: "local_cli" }>;
-export type OpencodeFullRemoteServerRuntimeConfig = Extract<OpencodeFullRuntimeConfig, { executionMode: "remote_server" }>;
-export type OpencodeFullLocalSdkRuntimeConfig = Extract<OpencodeFullRuntimeConfig, { executionMode: "local_sdk" }>;
 export type OpencodeFullRemoteAuthPersisted = z.infer<typeof opencodeFullRemoteAuthPersistedSchema>;
-export type OpencodeFullRemoteAuthRuntime = z.infer<typeof opencodeFullRemoteAuthRuntimeSchema>;
-export type OpencodeFullRemoteProjectTarget = z.infer<typeof opencodeFullRemoteProjectTargetSchema>;
+export type OpencodeFullRemoteProjectTarget = z.infer<typeof opencodeFullRemoteProjectTargetShapeSchema>;
 
 export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
   return {
@@ -209,7 +137,7 @@ export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
           { value: "remote_server", label: "Remote server" },
           { value: "local_sdk", label: "Local SDK (deferred)" },
         ],
-        hint: "Explicit mode selection. local_sdk is intentionally deferred and not executable in Cycle 1.1.",
+        hint: "Explicit mode selection. local_sdk is intentionally deferred and not executable in the current MVP runtime.",
       },
       {
         key: "model",
@@ -333,7 +261,7 @@ export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
         label: "Remote server · Project target",
         type: "textarea",
         group: "Remote server",
-        hint: "JSON object. server_default is the only directly supported target identity in Cycle 1.1.",
+        hint: "JSON object. MVP validation currently accepts only {\"mode\":\"server_default\"}.",
       },
       {
         key: "localSdk.sdkProviderHint",
@@ -359,3 +287,11 @@ export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
     ],
   };
 }
+
+export type {
+  OpencodeFullLocalCliRuntimeConfig,
+  OpencodeFullLocalSdkRuntimeConfig,
+  OpencodeFullRemoteAuthRuntime,
+  OpencodeFullRemoteServerRuntimeConfig,
+  OpencodeFullRuntimeConfig,
+} from "./runtime-schema.js";

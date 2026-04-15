@@ -1,11 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import type { AdapterEnvironmentCheck } from "@paperclipai/adapter-utils";
+import { describe, expect, it } from "vitest";
 import {
   getOpencodeFullConfigSchema,
   opencodeFullPersistedConfigSchema,
-  opencodeFullRuntimeConfigSchema,
 } from "./config-schema.js";
-import { testEnvironment } from "./index.js";
+import { opencodeFullRuntimeConfigSchema } from "./runtime-schema.js";
 
 describe("opencodeFull config schemas", () => {
   it("accepts secret-capable persisted remote auth and keeps persisted/runtime shapes distinct", () => {
@@ -51,7 +49,7 @@ describe("opencodeFull config schemas", () => {
         auth: { mode: "bearer", token: "resolved-token" },
         healthTimeoutSec: 10,
         requireHealthyServer: true,
-        projectTarget: { mode: "server_default", requireDedicatedServer: false },
+        projectTarget: { mode: "server_default" },
       },
     });
 
@@ -74,6 +72,46 @@ describe("opencodeFull config schemas", () => {
     expect(parsed).toHaveProperty("localSdk");
     expect(parsed).not.toHaveProperty("localCli");
     expect(parsed).not.toHaveProperty("remoteServer");
+  });
+
+  it("rejects non-server_default persisted remote targets for MVP", () => {
+    const result = opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "paperclip_workspace" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("keeps non-none auth branches as persisted schema placeholders", () => {
+    const parsed = opencodeFullPersistedConfigSchema.parse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: {
+          mode: "header",
+          headerName: "X-API-Key",
+          headerValue: {
+            type: "secret_ref",
+            secretId: "11111111-1111-4111-8111-111111111111",
+            version: "latest",
+          },
+        },
+      },
+    });
+
+    expect(parsed.executionMode).toBe("remote_server");
+    if (parsed.executionMode !== "remote_server") {
+      throw new Error("expected remote_server persisted config");
+    }
+
+    expect(parsed.remoteServer.auth.mode).toBe("header");
   });
 
   it("keeps mode-specific config fields explicit in the config schema surface", () => {
@@ -109,117 +147,10 @@ describe("opencodeFull config schemas", () => {
         },
         healthTimeoutSec: 10,
         requireHealthyServer: true,
-        projectTarget: { mode: "server_default", requireDedicatedServer: false },
+        projectTarget: { mode: "server_default" },
       },
     });
 
     expect(result.success).toBe(false);
-  });
-
-  it("reports remote target readiness truthfully in config-only environment checks", async () => {
-    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/health")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ status: "ok" }),
-        };
-      }
-      if (url.endsWith("/models")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ models: [{ id: "openai/gpt-5.4" }] }),
-        };
-      }
-      throw new Error(`Unexpected fetch URL: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const serverDefault = await testEnvironment({
-      companyId: "company-1",
-      adapterType: "opencode_full",
-      config: {
-        executionMode: "remote_server",
-        model: "openai/gpt-5.4",
-        timeoutSec: 120,
-        connectTimeoutSec: 10,
-        eventStreamIdleTimeoutSec: 30,
-        failFastWhenUnavailable: true,
-        remoteServer: {
-          baseUrl: "https://opencode.example.com",
-          auth: { mode: "none" },
-          healthTimeoutSec: 10,
-          requireHealthyServer: true,
-          projectTarget: { mode: "server_default", requireDedicatedServer: false },
-        },
-      },
-    });
-
-    expect(serverDefault.status).toBe("pass");
-    expect(serverDefault.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_remote_server_reachable",
-      "opencode_remote_model_valid",
-    ]));
-
-    const deferred = await testEnvironment({
-      companyId: "company-1",
-      adapterType: "opencode_full",
-      config: {
-        executionMode: "remote_server",
-        model: "openai/gpt-5.4",
-        timeoutSec: 120,
-        connectTimeoutSec: 10,
-        eventStreamIdleTimeoutSec: 30,
-        failFastWhenUnavailable: true,
-        remoteServer: {
-          baseUrl: "https://opencode.example.com",
-          auth: { mode: "none" },
-          healthTimeoutSec: 10,
-          requireHealthyServer: true,
-          projectTarget: {
-            mode: "paperclip_workspace",
-            requireDedicatedServer: false,
-          },
-        },
-      },
-    });
-
-    expect(deferred.status).toBe("warn");
-    expect(deferred.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_remote_target_not_proven",
-    ]));
-
-    const unsupported = await testEnvironment({
-      companyId: "company-1",
-      adapterType: "opencode_full",
-      config: {
-        executionMode: "remote_server",
-        model: "openai/gpt-5.4",
-        timeoutSec: 120,
-        connectTimeoutSec: 10,
-        eventStreamIdleTimeoutSec: 30,
-        failFastWhenUnavailable: true,
-        remoteServer: {
-          baseUrl: "https://opencode.example.com",
-          auth: { mode: "none" },
-          healthTimeoutSec: 10,
-          requireHealthyServer: true,
-          projectTarget: {
-            mode: "fixed_path",
-            projectPath: "/srv/opencode/company-a",
-            requireDedicatedServer: false,
-          },
-        },
-      },
-    });
-
-    expect(unsupported.status).toBe("fail");
-    expect(unsupported.checks.map((check: AdapterEnvironmentCheck) => check.code)).toEqual(expect.arrayContaining([
-      "opencode_remote_target_not_proven",
-    ]));
-
-    vi.unstubAllGlobals();
   });
 });

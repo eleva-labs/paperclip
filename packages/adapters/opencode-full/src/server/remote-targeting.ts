@@ -1,5 +1,5 @@
 import type { OpencodeFullRemoteProjectTarget } from "./config-schema.js";
-import { opencodeFullRemoteProjectTargetSchema } from "./config-schema.js";
+import { opencodeFullRemoteProjectTargetShapeSchema } from "./config-schema.js";
 
 export type RemoteTargetIdentityResolution =
   | {
@@ -25,7 +25,7 @@ export type RemoteTargetIdentityResolution =
     };
 
 export function resolveRemoteTargetIdentity(rawTarget: unknown): RemoteTargetIdentityResolution {
-  const target = opencodeFullRemoteProjectTargetSchema.parse(rawTarget);
+  const target = opencodeFullRemoteProjectTargetShapeSchema.parse(rawTarget);
 
   switch (target.mode) {
     case "server_default":
@@ -33,7 +33,7 @@ export function resolveRemoteTargetIdentity(rawTarget: unknown): RemoteTargetIde
         status: "resolved",
         targetMode: "server_default",
         resolvedTargetIdentity: "server-default",
-        message: "server_default is the safe baseline remote target identity proven in the Cycle 3.1 spike.",
+        message: "server_default is the safe baseline remote target identity for the current MVP remote mode.",
       };
     case "paperclip_workspace":
       return {
@@ -80,7 +80,7 @@ export function isRemoteTargetModeResolved(rawTarget: unknown): boolean {
 }
 
 export function getRemoteTargetMode(rawTarget: unknown): OpencodeFullRemoteProjectTarget["mode"] {
-  return opencodeFullRemoteProjectTargetSchema.parse(rawTarget).mode;
+  return opencodeFullRemoteProjectTargetShapeSchema.parse(rawTarget).mode;
 }
 
 export function isExecutableRemoteTarget(rawTarget: unknown): boolean {

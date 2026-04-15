@@ -4,9 +4,11 @@ import {
   createRemoteSessionParams,
   getConfigFingerprint,
   getRemoteSessionResumeDecision,
+  opencodeFullSessionParamsSchema,
   sessionCodec,
   shouldStartFreshRemoteSession,
 } from "./session-codec.js";
+import { parseOpencodeFullExecutionResult } from "./result-schema.js";
 
 const baseConfig = {
   executionMode: "remote_server",
@@ -21,7 +23,7 @@ const baseConfig = {
     auth: { mode: "bearer", token: "resolved-token" },
     healthTimeoutSec: 10,
     requireHealthyServer: true,
-    projectTarget: { mode: "server_default", requireDedicatedServer: false },
+    projectTarget: { mode: "server_default" },
   },
 };
 
@@ -32,7 +34,7 @@ describe("opencodeFull session codec and isolation", () => {
       ...baseConfig,
       remoteServer: {
         ...baseConfig.remoteServer,
-        projectTarget: { requireDedicatedServer: false, mode: "server_default" },
+        projectTarget: { mode: "server_default" },
       },
     });
 
@@ -45,6 +47,8 @@ describe("opencodeFull session codec and isolation", () => {
       ...baseConfig,
       remoteServer: { ...baseConfig.remoteServer, auth: { mode: "bearer", token: "other-token" } },
     })).not.toBe(fingerprintA);
+    expect(fingerprintA).not.toContain("resolved-token");
+    expect(fingerprintA).not.toContain("opencode.example.com");
   });
 
   it("serializes and deserializes remote session params", () => {
@@ -53,15 +57,66 @@ describe("opencodeFull session codec and isolation", () => {
       agentId: "agent-1",
       config: baseConfig,
       remoteSessionId: "remote-session-1",
-      canonicalWorkspaceId: "workspace-1",
-      canonicalWorkspaceCwd: "/repo",
-      createdAt: "2026-04-11T12:00:00.000Z",
     });
 
     const serialized = sessionCodec.serialize(session);
     expect(serialized).toEqual(session);
     expect(sessionCodec.deserialize(serialized)).toEqual(session);
     expect(sessionCodec.getDisplayId(serialized)).toBe("remote-session-1");
+    expect(opencodeFullSessionParamsSchema.parse(session)).toEqual({
+      executionMode: "remote_server",
+      sessionId: "remote-session-1",
+      remoteSessionId: "remote-session-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      adapterType: "opencode_full",
+      configFingerprint: getConfigFingerprint(baseConfig),
+      ownership: {
+        companyId: "company-1",
+        agentId: "agent-1",
+        adapterType: "opencode_full",
+        executionMode: "remote_server",
+        configFingerprint: getConfigFingerprint(baseConfig),
+      },
+      baseUrl: "https://opencode.example.com",
+      projectTargetMode: "server_default",
+      resolvedTargetIdentity: "server-default",
+    });
+    expect(session.configFingerprint).not.toContain("resolved-token");
+  });
+
+  it("deserializes a pre-cycle-1.1 legacy remote session payload", () => {
+    expect(sessionCodec.deserialize({
+      remoteSessionId: "legacy-remote-session-1",
+      ownership: {
+        companyId: "company-1",
+        agentId: "agent-1",
+        adapterType: "opencode_full",
+        executionMode: "remote_server",
+        configFingerprint: "legacy-fingerprint",
+      },
+      baseUrl: "https://opencode.example.com",
+      projectTargetMode: "server_default",
+      resolvedTargetIdentity: "server-default",
+    })).toEqual({
+      executionMode: "remote_server",
+      sessionId: "legacy-remote-session-1",
+      remoteSessionId: "legacy-remote-session-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      adapterType: "opencode_full",
+      configFingerprint: "legacy-fingerprint",
+      ownership: {
+        companyId: "company-1",
+        agentId: "agent-1",
+        adapterType: "opencode_full",
+        executionMode: "remote_server",
+        configFingerprint: "legacy-fingerprint",
+      },
+      baseUrl: "https://opencode.example.com",
+      projectTargetMode: "server_default",
+      resolvedTargetIdentity: "server-default",
+    });
   });
 
   it("requires exact ownership, config fingerprint, base URL, target mode, and resolved target identity for resume", () => {
@@ -92,24 +147,17 @@ describe("opencodeFull session codec and isolation", () => {
       agentId: "agent-1",
       config: { ...baseConfig, remoteServer: { ...baseConfig.remoteServer, baseUrl: "https://changed.example.com" } },
       sessionParams: session,
-    })).toEqual({ ok: false, reason: "config_fingerprint_mismatch" });
+    })).toEqual({ ok: false, reason: "base_url_mismatch" });
 
     expect(canResumeRemoteSession({
       companyId: "company-1",
       agentId: "agent-1",
       config: {
         ...baseConfig,
-        remoteServer: {
-          ...baseConfig.remoteServer,
-          projectTarget: {
-            mode: "server_managed_namespace",
-            namespaceTemplate: "company/{companyId}",
-            requireDedicatedServer: false,
-          },
-        },
+        model: "openai/gpt-5.2",
       },
       sessionParams: session,
-    })).toEqual({ ok: false, reason: "TARGET_MODE_REQUIRES_SERVER_ISOLATION_PROOF" });
+    })).toEqual({ ok: false, reason: "config_fingerprint_mismatch" });
   });
 
   it("returns a resume decision helper that forces fresh remote sessions on gating changes", () => {
@@ -146,5 +194,29 @@ describe("opencodeFull session codec and isolation", () => {
       },
       sessionParams: session,
     })).toBe(true);
+  });
+
+  it("normalizes legacy execution errors into approved result families", () => {
+    expect(parseOpencodeFullExecutionResult({
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorCode: "REMOTE_AUTH_REJECTED",
+      errorMessage: "Remote server rejected authentication.",
+      sessionParams: null,
+      sessionDisplayId: null,
+      summary: null,
+    }).errorCode).toBe("AUTH_REJECTED");
+
+    expect(parseOpencodeFullExecutionResult({
+      exitCode: 1,
+      signal: null,
+      timedOut: true,
+      errorCode: "REMOTE_TIMEOUT",
+      errorMessage: "Remote execution timed out.",
+      sessionParams: null,
+      sessionDisplayId: null,
+      summary: null,
+    }).errorCode).toBe("TIMEOUT");
   });
 });
