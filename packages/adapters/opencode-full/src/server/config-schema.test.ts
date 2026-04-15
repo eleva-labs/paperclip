@@ -164,7 +164,10 @@ describe("opencodeFull config schemas", () => {
       "executionMode",
       "localCli.command",
       "remoteServer.baseUrl",
+      "remoteServer.auth.mode",
+      "remoteServer.auth.token",
       "remoteServer.auth",
+      "remoteServer.projectTarget.mode",
       "remoteServer.projectTarget",
       "localSdk.sdkProviderHint",
     ]));

@@ -2,6 +2,35 @@ import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
 export { parseOpenCodeFullStdoutLine as parseStdoutLine } from "../ui-parser.js";
 
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asEnvBinding(value: unknown): string | Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? value.trim() : undefined;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type === "plain" && typeof record.value === "string") {
+    return { type: "plain", value: record.value };
+  }
+  if (record.type === "secret_ref" && typeof record.secretId === "string") {
+    return {
+      type: "secret_ref",
+      secretId: record.secretId,
+      ...(typeof record.version === "number" || record.version === "latest"
+        ? { version: record.version }
+        : {}),
+    };
+  }
+
+  return undefined;
+}
+
 function parseJsonObject(text: unknown): Record<string, unknown> | undefined {
   if (typeof text !== "string") return undefined;
   const trimmed = text.trim();
@@ -13,6 +42,37 @@ function parseJsonObject(text: unknown): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseRemoteAuth(raw: Record<string, unknown>): Record<string, unknown> {
+  const authMode = typeof raw["remoteServer.auth.mode"] === "string"
+    ? raw["remoteServer.auth.mode"]
+    : undefined;
+
+  if (authMode === "bearer") {
+    return {
+      mode: "bearer",
+      token: asEnvBinding(raw["remoteServer.auth.token"]) ?? "",
+    };
+  }
+
+  if (authMode === "basic") {
+    return {
+      mode: "basic",
+      username: asNonEmptyString(raw["remoteServer.auth.username"]) ?? "",
+      password: asEnvBinding(raw["remoteServer.auth.password"]) ?? "",
+    };
+  }
+
+  if (authMode === "header") {
+    return {
+      mode: "header",
+      headerName: asNonEmptyString(raw["remoteServer.auth.headerName"]) ?? "",
+      headerValue: asEnvBinding(raw["remoteServer.auth.headerValue"]) ?? "",
+    };
+  }
+
+  return parseJsonObject(raw["remoteServer.auth"]) ?? { mode: "none" };
 }
 
 export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<string, unknown> {
@@ -41,16 +101,16 @@ export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<stri
       env: parseJsonObject(raw["localCli.env"]),
     };
   } else if (executionMode === "remote_server") {
-    const parsedRemoteTarget = parseJsonObject(raw["remoteServer.projectTarget"]);
-    const remoteTargetMode = typeof raw["remoteServer.projectTarget.mode"] === "string"
-      ? raw["remoteServer.projectTarget.mode"]
-      : undefined;
     config.remoteServer = {
       baseUrl: raw["remoteServer.baseUrl"],
-      auth: parseJsonObject(raw["remoteServer.auth"]) ?? { mode: "none" },
+      auth: parseRemoteAuth(raw),
       healthTimeoutSec: raw["remoteServer.healthTimeoutSec"] ?? 10,
       requireHealthyServer: raw["remoteServer.requireHealthyServer"] ?? true,
-      projectTarget: parsedRemoteTarget ?? { mode: remoteTargetMode ?? "server_default" },
+      projectTarget: {
+        mode: typeof raw["remoteServer.projectTarget.mode"] === "string"
+          ? raw["remoteServer.projectTarget.mode"]
+          : "server_default",
+      },
     };
   } else if (executionMode === "local_sdk") {
     config.localSdk = {

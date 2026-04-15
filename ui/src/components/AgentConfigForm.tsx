@@ -265,6 +265,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const config = !isCreate ? ((props.agent.adapterConfig ?? {}) as Record<string, unknown>) : {};
   const runtimeConfig = !isCreate ? ((props.agent.runtimeConfig ?? {}) as Record<string, unknown>) : {};
   const heartbeat = !isCreate ? ((runtimeConfig.heartbeat ?? {}) as Record<string, unknown>) : {};
+  const draftAdapterSchemaValues = !isCreate
+    ? ((runtimeConfig.draftAdapterSchemaValues ?? {}) as Record<string, unknown>)
+    : {};
 
   const adapterType = isCreate
     ? props.values.adapterType
@@ -321,7 +324,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     adapterType,
     values: isCreate ? props.values : null,
     set: isCreate ? (patch: Partial<CreateConfigValues>) => props.onChange(patch) : null,
-    config,
+    config: !isCreate && Object.keys(draftAdapterSchemaValues).length > 0
+      ? { ...config, ...draftAdapterSchemaValues }
+      : config,
     eff: eff as <T>(group: "adapterConfig", field: string, original: T) => T,
     mark: mark as (group: "adapterConfig", field: string, value: unknown) => void,
     models,

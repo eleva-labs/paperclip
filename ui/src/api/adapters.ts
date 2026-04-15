@@ -30,6 +30,20 @@ export interface AdapterInstallResult {
   installedAt: string;
 }
 
+export interface AdapterConfigSchemaResponse {
+  fields: Array<{
+    key: string;
+    label: string;
+    type: "text" | "select" | "toggle" | "number" | "textarea" | "combobox";
+    options?: Array<{ label: string; value: string; group?: string }>;
+    default?: unknown;
+    hint?: string;
+    required?: boolean;
+    group?: string;
+    meta?: Record<string, unknown>;
+  }>;
+}
+
 export const adaptersApi = {
   /** List all registered adapters (built-in + external). */
   list: () => api.get<AdapterInfo[]>("/adapters"),
@@ -52,6 +66,9 @@ export const adaptersApi = {
   /** Reload an external adapter (bust server + client caches). */
   reload: (type: string) =>
     api.post<{ type: string; version?: string; reloaded: boolean }>(`/adapters/${type}/reload`, {}),
+
+  /** Fetch a schema-driven config surface for an adapter. */
+  configSchema: (type: string) => api.get<AdapterConfigSchemaResponse>(`/adapters/${type}/config-schema`),
 
   /** Reinstall an npm-sourced adapter (pulls latest from registry, then reloads). */
   reinstall: (type: string) =>

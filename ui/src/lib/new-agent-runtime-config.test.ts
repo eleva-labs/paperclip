@@ -31,4 +31,27 @@ describe("buildNewAgentRuntimeConfig", () => {
       },
     });
   });
+
+  it("preserves draft adapter schema values for create-mode editing", () => {
+    expect(
+      buildNewAgentRuntimeConfig({
+        adapterSchemaValues: {
+          executionMode: "remote_server",
+          "remoteServer.baseUrl": "https://example.com/opencode",
+        },
+      }),
+    ).toEqual({
+      heartbeat: {
+        enabled: false,
+        intervalSec: 300,
+        wakeOnDemand: true,
+        cooldownSec: 10,
+        maxConcurrentRuns: 1,
+      },
+      draftAdapterSchemaValues: {
+        executionMode: "remote_server",
+        "remoteServer.baseUrl": "https://example.com/opencode",
+      },
+    });
+  });
 });

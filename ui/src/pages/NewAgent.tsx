@@ -179,6 +179,7 @@ export function NewAgent() {
       runtimeConfig: buildNewAgentRuntimeConfig({
         heartbeatEnabled: configValues.heartbeatEnabled,
         intervalSec: configValues.intervalSec,
+        adapterSchemaValues: configValues.adapterSchemaValues,
       }),
       budgetMonthlyCents: 0,
     });

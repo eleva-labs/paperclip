@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 import type { AdapterConfigSchema, ConfigFieldSchema, CreateConfigValues } from "@paperclipai/adapter-utils";
+import { adaptersApi } from "../api/adapters";
 
 import type { AdapterConfigFieldsProps } from "./types";
 import {
@@ -78,6 +79,19 @@ const OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS = new Set([
   "allowProjectConfig",
   "canonicalWorkspaceOnly",
   "syncPluginKey",
+]);
+const OPENCODE_FULL_HIDDEN_FIELDS = new Set([
+  "localSdk.sdkProviderHint",
+  "localSdk.allowProjectConfig",
+  "localSdk.env",
+  "remoteServer.auth",
+  "remoteServer.projectTarget",
+]);
+const OPENCODE_FULL_SHARED_ADVANCED_FIELDS = new Set([
+  "timeoutSec",
+  "connectTimeoutSec",
+  "eventStreamIdleTimeoutSec",
+  "failFastWhenUnavailable",
 ]);
 
 
@@ -241,12 +255,7 @@ async function fetchConfigSchema(adapterType: string): Promise<AdapterConfigSche
 
   const promise = (async () => {
     try {
-      const res = await fetch(`/api/adapters/${encodeURIComponent(adapterType)}/config-schema`);
-      if (!res.ok) {
-        failedSchemaTypes.add(adapterType);
-        return null;
-      }
-      const schema = (await res.json()) as AdapterConfigSchema;
+      const schema = await adaptersApi.configSchema(adapterType) as AdapterConfigSchema;
       schemaCache.set(adapterType, schema);
       return schema;
     } catch {
@@ -307,6 +316,72 @@ function getDefaultValue(field: ConfigFieldSchema): unknown {
   }
 }
 
+function isSecretRefLike(value: unknown): value is { type: "secret_ref"; secretId: string; version?: string | number } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.type === "secret_ref" && typeof record.secretId === "string";
+}
+
+function normalizeSecretBindingDraft(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (isSecretRefLike(value)) {
+    const version = value.version === undefined ? "" : `@${String(value.version)}`;
+    return `secret_ref:${value.secretId}${version}`;
+  }
+  return "";
+}
+
+function parseSecretBindingDraft(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!trimmed.startsWith("secret_ref:")) return trimmed;
+  const secretRef = trimmed.slice("secret_ref:".length).trim();
+  if (!secretRef) return trimmed;
+  const atIndex = secretRef.indexOf("@");
+  if (atIndex < 0) {
+    return { type: "secret_ref", secretId: secretRef, version: "latest" };
+  }
+  const secretId = secretRef.slice(0, atIndex).trim();
+  const rawVersion = secretRef.slice(atIndex + 1).trim();
+  if (!secretId) return trimmed;
+  if (!rawVersion) return { type: "secret_ref", secretId, version: "latest" };
+  const numericVersion = Number(rawVersion);
+  return {
+    type: "secret_ref",
+    secretId,
+    version: Number.isInteger(numericVersion) && numericVersion > 0 ? numericVersion : rawVersion,
+  };
+}
+
+function getOpenCodeFullExecutionMode(value: unknown): string {
+  return typeof value === "string" && value ? value : "local_cli";
+}
+
+function getOpenCodeFullRemoteAuthMode(value: unknown): string {
+  return typeof value === "string" && value ? value : "none";
+}
+
+function getOpenCodeFullVisibleFields(fields: ConfigFieldSchema[], executionMode: string): ConfigFieldSchema[] {
+  return fields.filter((field) => {
+    if (OPENCODE_FULL_HIDDEN_FIELDS.has(field.key)) return false;
+    if (field.key.startsWith("localCli.")) return executionMode === "local_cli";
+    if (field.key === "remoteServer.healthTimeoutSec" || field.key === "remoteServer.requireHealthyServer") {
+      return false;
+    }
+    if (field.key.startsWith("remoteServer.")) return executionMode === "remote_server";
+    if (field.key.startsWith("localSdk.")) return false;
+    return true;
+  });
+}
+
+function getRenderedSelectOptions(adapterType: string, field: ConfigFieldSchema): Array<{ value: string; label: string }> {
+  const options = field.options ?? [];
+  if (adapterType === "opencode_full" && field.key === "executionMode") {
+    return options.filter((option) => option.value === "local_cli" || option.value === "remote_server");
+  }
+  return options;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -323,7 +398,10 @@ export function SchemaConfigFields({
 }: AdapterConfigFieldsProps) {
   const schema = useConfigSchema(adapterType);
   const isOpenCodeProjectLocal = adapterType === "opencode_project_local";
+  const isOpenCodeFull = adapterType === "opencode_full";
   const [projectAdvancedOpen, setProjectAdvancedOpen] = useState(false);
+  const [openCodeFullSharedAdvancedOpen, setOpenCodeFullSharedAdvancedOpen] = useState(false);
+  const [openCodeFullRemoteAdvancedOpen, setOpenCodeFullRemoteAdvancedOpen] = useState(false);
 
   const [defaultsApplied, setDefaultsApplied] = useState(false);
   useEffect(() => {
@@ -343,17 +421,45 @@ export function SchemaConfigFields({
     setDefaultsApplied(true);
   }, [schema, isCreate, defaultsApplied, set, values?.adapterSchemaValues]);
 
+  useEffect(() => {
+    if (!isCreate || adapterType !== "opencode_full") return;
+    if (values?.adapterSchemaValues?.["remoteServer.projectTarget.mode"] === "server_default") return;
+    set?.({
+      adapterSchemaValues: {
+        ...values?.adapterSchemaValues,
+        "remoteServer.projectTarget.mode": "server_default",
+      },
+    });
+  }, [adapterType, isCreate, set, values?.adapterSchemaValues]);
+
   if (!schema || schema.fields.length === 0) return null;
   const schemaFields = schema.fields;
+  const executionModeField = schemaFields.find((field) => field.key === "executionMode");
+  const currentExecutionMode = getOpenCodeFullExecutionMode(
+    executionModeField ? readValue(executionModeField) : undefined,
+  );
+  const remoteAuthMode = getOpenCodeFullRemoteAuthMode(
+    isOpenCodeFull
+      ? (isCreate
+          ? values?.adapterSchemaValues?.["remoteServer.auth.mode"]
+          : eff("adapterConfig", "remoteServer.auth.mode", config["remoteServer.auth.mode"] ?? "none"))
+      : undefined,
+  );
 
   const visibleFields = isOpenCodeProjectLocal
     ? schemaFields.filter((field) => !OPENCODE_PROJECT_LOCAL_HIDDEN_FIELDS.has(field.key))
-    : schemaFields;
+    : isOpenCodeFull
+      ? getOpenCodeFullVisibleFields(schemaFields, currentExecutionMode)
+      : schemaFields;
   const inlineFields = isOpenCodeProjectLocal
     ? visibleFields.filter((field) => !OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS.has(field.key))
+    : isOpenCodeFull
+      ? visibleFields.filter((field) => !OPENCODE_FULL_SHARED_ADVANCED_FIELDS.has(field.key))
     : visibleFields;
   const advancedFields = isOpenCodeProjectLocal
     ? visibleFields.filter((field) => OPENCODE_PROJECT_LOCAL_ADVANCED_FIELDS.has(field.key))
+    : isOpenCodeFull
+      ? visibleFields.filter((field) => OPENCODE_FULL_SHARED_ADVANCED_FIELDS.has(field.key))
     : [];
   const instructionsFileField = schemaFields.find((field) => field.key === "instructionsFilePath");
   const skipPermissionsField = schemaFields.find((field) => field.key === "dangerouslySkipPermissions");
@@ -407,15 +513,109 @@ export function SchemaConfigFields({
     }
   }
 
+  function renderOpenCodeFullAuthFields() {
+    if (currentExecutionMode !== "remote_server") return null;
+
+    return (
+      <div className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-3">
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-muted-foreground">Remote server setup</div>
+          <p className="text-xs text-muted-foreground">
+            Connect to an already-running OpenCode server. Paperclip checks config, reachability, auth, health, and model availability only.
+          </p>
+        </div>
+
+        <Field
+          label="Authentication"
+          hint="MVP happy path is no authentication. Other modes are advanced placeholders for deferred setup, not proven standard paths yet."
+        >
+          <SelectField
+            value={remoteAuthMode}
+            options={[
+              { value: "none", label: "None (MVP happy path)" },
+              { value: "bearer", label: "Bearer token (advanced placeholder)" },
+              { value: "basic", label: "Basic auth (advanced placeholder)" },
+              { value: "header", label: "Custom header (advanced placeholder)" },
+            ]}
+            onChange={(value) => writeValue({ key: "remoteServer.auth.mode", label: "Authentication", type: "select" }, value)}
+          />
+        </Field>
+
+        {remoteAuthMode === "bearer" && (
+          <Field label="Bearer token" hint="Use plain text or secret_ref:<secret-id>@latest.">
+            <DraftInput
+              value={normalizeSecretBindingDraft(readValue({ key: "remoteServer.auth.token", label: "Bearer token", type: "text" }))}
+              onCommit={(value) => writeValue({ key: "remoteServer.auth.token", label: "Bearer token", type: "text" }, parseSecretBindingDraft(value))}
+              immediate
+              className={inputClass}
+              placeholder="secret_ref:<secret-id>@latest"
+            />
+          </Field>
+        )}
+
+        {remoteAuthMode === "basic" && (
+          <>
+            <Field label="Username">
+              <DraftInput
+                value={String(readValue({ key: "remoteServer.auth.username", label: "Username", type: "text" }) ?? "")}
+                onCommit={(value) => writeValue({ key: "remoteServer.auth.username", label: "Username", type: "text" }, value || undefined)}
+                immediate
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Password" hint="Use plain text or secret_ref:<secret-id>@latest.">
+              <DraftInput
+                value={normalizeSecretBindingDraft(readValue({ key: "remoteServer.auth.password", label: "Password", type: "text" }))}
+                onCommit={(value) => writeValue({ key: "remoteServer.auth.password", label: "Password", type: "text" }, parseSecretBindingDraft(value))}
+                immediate
+                className={inputClass}
+                placeholder="secret_ref:<secret-id>@latest"
+              />
+            </Field>
+          </>
+        )}
+
+        {remoteAuthMode === "header" && (
+          <>
+            <Field label="Header name">
+              <DraftInput
+                value={String(readValue({ key: "remoteServer.auth.headerName", label: "Header name", type: "text" }) ?? "")}
+                onCommit={(value) => writeValue({ key: "remoteServer.auth.headerName", label: "Header name", type: "text" }, value || undefined)}
+                immediate
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Header value" hint="Use plain text or secret_ref:<secret-id>@latest.">
+              <DraftInput
+                value={normalizeSecretBindingDraft(readValue({ key: "remoteServer.auth.headerValue", label: "Header value", type: "text" }))}
+                onCommit={(value) => writeValue({ key: "remoteServer.auth.headerValue", label: "Header value", type: "text" }, parseSecretBindingDraft(value))}
+                immediate
+                className={inputClass}
+                placeholder="secret_ref:<secret-id>@latest"
+              />
+            </Field>
+          </>
+        )}
+
+        <Field label="Target mode" hint="Standard MVP operator flow is fixed to server_default only.">
+          <div className="rounded-md border border-border px-2.5 py-1.5 text-sm font-mono text-muted-foreground">
+            server_default
+          </div>
+        </Field>
+      </div>
+    );
+  }
+
   function renderField(field: ConfigFieldSchema) {
         switch (field.type) {
           case "select": {
             const currentVal = String(readValue(field) ?? "");
+            const options = getRenderedSelectOptions(adapterType, field);
             return (
               <Field key={field.key} label={field.label} hint={field.hint}>
                 <SelectField
                   value={currentVal}
-                  options={field.options ?? []}
+                  options={options}
                   onChange={(v) => writeValue(field, v)}
                 />
               </Field>
@@ -542,6 +742,40 @@ export function SchemaConfigFields({
 
       {inlineFields.map((field) => renderField(field))}
 
+      {isOpenCodeFull && currentExecutionMode === "remote_server" && renderOpenCodeFullAuthFields()}
+
+      {isOpenCodeFull && advancedFields.length > 0 && (
+        <CollapsibleSection
+          title="Shared advanced runtime settings"
+          open={openCodeFullSharedAdvancedOpen}
+          onToggle={() => setOpenCodeFullSharedAdvancedOpen((open) => !open)}
+        >
+          <div className="space-y-3">
+            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              These settings apply to the active OpenCode mode only. They do not imply workspace-aware readiness.
+            </div>
+            {advancedFields.map((field) => renderField(field))}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {isOpenCodeFull && currentExecutionMode === "remote_server" && (
+        <CollapsibleSection
+          title="Remote health settings"
+          open={openCodeFullRemoteAdvancedOpen}
+          onToggle={() => setOpenCodeFullRemoteAdvancedOpen((open) => !open)}
+        >
+          <div className="space-y-3">
+            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              Remote mode connects to an already-running OpenCode server and only supports server_default targeting in this MVP.
+            </div>
+            {schemaFields
+              .filter((field) => field.key === "remoteServer.healthTimeoutSec" || field.key === "remoteServer.requireHealthyServer")
+              .map((field) => renderField(field))}
+          </div>
+        </CollapsibleSection>
+      )}
+
       {isOpenCodeProjectLocal && advancedFields.length > 0 && (
         <CollapsibleSection
           title="Project adapter options"
@@ -586,4 +820,11 @@ export function buildSchemaAdapterConfig(
   }
 
   return ac;
+}
+
+export function buildPersistedSchemaDraftRuntimeConfig(values: CreateConfigValues): Record<string, unknown> | undefined {
+  if (!values.adapterSchemaValues || Object.keys(values.adapterSchemaValues).length === 0) return undefined;
+  return {
+    draftAdapterSchemaValues: { ...values.adapterSchemaValues },
+  };
 }

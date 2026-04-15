@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SchemaConfigFields } from "./schema-config-fields";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { adaptersApi } from "../api/adapters";
+import type { AdapterConfigSchemaResponse } from "../api/adapters";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,7 +15,13 @@ vi.mock("../components/PathInstructionsModal", () => ({
   ChoosePathButton: () => <button type="button">Choose</button>,
 }));
 
-const projectSchemaResponse = {
+vi.mock("../api/adapters", () => ({
+  adaptersApi: {
+    configSchema: vi.fn(),
+  },
+}));
+
+const projectSchemaResponse: AdapterConfigSchemaResponse = {
   fields: [
     { key: "command", label: "Command", type: "text", default: "opencode", hint: "OpenCode CLI binary to execute." },
     { key: "model", label: "Model", type: "combobox", required: true, hint: "OpenCode model id in provider/model format." },
@@ -45,6 +53,7 @@ describe("SchemaConfigFields", () => {
       json: async () => projectSchemaResponse,
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(adaptersApi.configSchema).mockResolvedValue(projectSchemaResponse);
   });
 
   afterEach(() => {

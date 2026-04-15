@@ -117,3 +117,6 @@ export function parseOpenCodeFullStdoutLine(line: string, ts: string): Transcrip
 
   return [{ kind: "stdout", ts, text: line }];
 }
+
+export type { CreateConfigValues } from "@paperclipai/adapter-utils";
+export { buildOpenCodeFullConfig } from "./ui/index.js";
