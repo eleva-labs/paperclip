@@ -25,12 +25,17 @@ async function requestJson(input: {
   path: string;
   timeoutSec: number;
   body?: Record<string, unknown>;
+  directory?: string | null;
 }): Promise<RemoteJsonResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, input.timeoutSec) * 1000);
 
   try {
-    const response = await fetch(join(input.baseUrl, input.path), {
+    const url = new URL(join(input.baseUrl, input.path));
+    if (input.directory) {
+      url.searchParams.set("directory", input.directory);
+    }
+    const response = await fetch(url.toString(), {
       method: input.method ?? "GET",
       headers: {
         Accept: "application/json",
@@ -120,6 +125,9 @@ export async function createRemoteSession(config: OpencodeFullRemoteServerRuntim
     path: "/session",
     timeoutSec: config.connectTimeoutSec,
     body,
+    directory: config.remoteServer.projectTarget.mode === "linked_project_context"
+      ? (config.remoteServer.linkRef?.linkedDirectoryHint ?? null)
+      : null,
   });
 }
 
@@ -129,6 +137,9 @@ export async function getRemoteSession(config: OpencodeFullRemoteServerRuntimeCo
     auth: config.remoteServer.auth,
     path: `/session/${encodeURIComponent(sessionId)}`,
     timeoutSec: config.connectTimeoutSec,
+    directory: config.remoteServer.projectTarget.mode === "linked_project_context"
+      ? (config.remoteServer.linkRef?.linkedDirectoryHint ?? null)
+      : null,
   });
 }
 
@@ -138,6 +149,9 @@ export async function getRemoteSessionMessages(config: OpencodeFullRemoteServerR
     auth: config.remoteServer.auth,
     path: `/session/${encodeURIComponent(sessionId)}/message`,
     timeoutSec: config.connectTimeoutSec,
+    directory: config.remoteServer.projectTarget.mode === "linked_project_context"
+      ? (config.remoteServer.linkRef?.linkedDirectoryHint ?? null)
+      : null,
   });
 }
 
@@ -162,5 +176,8 @@ export async function postRemoteSessionMessage(
     path: `/session/${encodeURIComponent(sessionId)}/message`,
     timeoutSec: config.timeoutSec,
     body,
+    directory: config.remoteServer.projectTarget.mode === "linked_project_context"
+      ? (config.remoteServer.linkRef?.linkedDirectoryHint ?? null)
+      : null,
   });
 }

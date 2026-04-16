@@ -85,6 +85,54 @@ describe("opencodeFull session codec and isolation", () => {
     expect(session.configFingerprint).not.toContain("resolved-token");
   });
 
+  it("serializes linked remote session params with workspace metadata", () => {
+    const linkedConfig = {
+      ...baseConfig,
+      remoteServer: {
+        ...baseConfig.remoteServer,
+        projectTarget: { mode: "linked_project_context" as const },
+        linkRef: {
+          mode: "linked_project_context" as const,
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared" as const,
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    };
+
+    const session = createRemoteSessionParams({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      remoteSessionId: "remote-session-linked-1",
+      canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+      linkedDirectoryHint: "/tmp/forgebox",
+    });
+
+    expect(opencodeFullSessionParamsSchema.parse(session)).toEqual({
+      executionMode: "remote_server",
+      sessionId: "remote-session-linked-1",
+      remoteSessionId: "remote-session-linked-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      adapterType: "opencode_full",
+      configFingerprint: getConfigFingerprint(linkedConfig),
+      ownership: {
+        companyId: "company-1",
+        agentId: "agent-1",
+        adapterType: "opencode_full",
+        executionMode: "remote_server",
+        configFingerprint: getConfigFingerprint(linkedConfig),
+      },
+      baseUrl: "https://opencode.example.com",
+      projectTargetMode: "linked_project_context",
+      resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/tmp/forgebox",
+      canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+      linkedDirectoryHint: "/tmp/forgebox",
+    });
+  });
+
   it("deserializes a pre-cycle-1.1 legacy remote session payload", () => {
     expect(sessionCodec.deserialize({
       remoteSessionId: "legacy-remote-session-1",
@@ -158,6 +206,75 @@ describe("opencodeFull session codec and isolation", () => {
       },
       sessionParams: session,
     })).toEqual({ ok: false, reason: "config_fingerprint_mismatch" });
+  });
+
+  it("requires linked workspace metadata to match for linked resume", () => {
+    const linkedConfig = {
+      ...baseConfig,
+      remoteServer: {
+        ...baseConfig.remoteServer,
+        projectTarget: { mode: "linked_project_context" as const },
+        linkRef: {
+          mode: "linked_project_context" as const,
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared" as const,
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    };
+
+    const session = createRemoteSessionParams({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      remoteSessionId: "remote-session-linked-1",
+    });
+
+    expect(canResumeRemoteSession({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      sessionParams: session,
+    })).toEqual({ ok: true });
+
+    expect(canResumeRemoteSession({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: {
+        ...linkedConfig,
+        remoteServer: {
+          ...linkedConfig.remoteServer,
+          linkRef: {
+            ...linkedConfig.remoteServer.linkRef,
+            mode: "linked_project_context" as const,
+            linkedDirectoryHint: "/tmp/other",
+          },
+        },
+      },
+      sessionParams: session,
+    })).toEqual({ ok: false, reason: "config_fingerprint_mismatch" });
+
+    expect(canResumeRemoteSession({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      sessionParams: {
+        ...session,
+        linkedDirectoryHint: "/tmp/other",
+        resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/tmp/other",
+      },
+    })).toEqual({ ok: false, reason: "resolved_target_identity_mismatch" });
+
+    expect(canResumeRemoteSession({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      sessionParams: {
+        ...session,
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+      },
+    })).toEqual({ ok: false, reason: "canonical_workspace_id_mismatch" });
   });
 
   it("returns a resume decision helper that forces fresh remote sessions on gating changes", () => {

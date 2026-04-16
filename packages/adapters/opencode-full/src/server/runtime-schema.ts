@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  opencodeFullLinkedRemoteTargetSchema,
   opencodeFullRemoteProjectTargetSchema,
 } from "./config-schema.js";
 import { validateRemoteServerBaseUrl } from "./remote-base-url.js";
@@ -60,6 +61,26 @@ export const opencodeFullRemoteServerRuntimeConfigSchema = opencodeFullSharedRun
     healthTimeoutSec: z.number().int().positive(),
     requireHealthyServer: z.boolean(),
     projectTarget: opencodeFullRemoteProjectTargetSchema,
+    linkRef: opencodeFullLinkedRemoteTargetSchema.optional(),
+  }).superRefine((value, ctx) => {
+    if (value.projectTarget.mode === "linked_project_context") {
+      if (!value.linkRef) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["linkRef"],
+          message: "linkRef is required when projectTarget.mode=linked_project_context",
+        });
+        return;
+      }
+    }
+
+    if (value.projectTarget.mode === "server_default" && value.linkRef) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["linkRef"],
+        message: "linkRef must be omitted when projectTarget.mode=server_default",
+      });
+    }
   }),
 });
 

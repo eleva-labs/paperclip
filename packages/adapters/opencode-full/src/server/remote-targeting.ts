@@ -1,28 +1,64 @@
 import type { OpencodeFullRemoteProjectTarget } from "./config-schema.js";
 import { opencodeFullRemoteProjectTargetShapeSchema } from "./config-schema.js";
+import type { OpencodeFullRemoteServerRuntimeConfig } from "./runtime-schema.js";
 
 export type RemoteTargetIdentityResolution =
   | {
       status: "resolved";
-      targetMode: "server_default";
-      resolvedTargetIdentity: "server_default";
+      targetMode: "server_default" | "linked_project_context";
+      resolvedTargetIdentity: string;
+      directoryQuery: string | null;
       message: string;
     }
   | {
-      status: "conditional";
-      targetMode: "paperclip_workspace" | "server_managed_namespace" | "fixed_path";
+      status: "invalid";
+      targetMode: "linked_project_context";
       code:
-        | "TARGET_MODE_REQUIRES_RUNTIME_PROBE"
-        | "TARGET_MODE_REQUIRES_SERVER_ISOLATION_PROOF"
-        | "TARGET_MODE_REQUIRES_DEDICATED_SERVER";
-      message: string;
-    }
-  | {
-      status: "unsupported";
-      targetMode: "fixed_path";
-      code: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH";
+        | "TARGET_LINK_REF_REQUIRED"
+        | "TARGET_LINK_MISSING_HINT";
       message: string;
     };
+
+export function resolveLinkedRemoteTarget(config: OpencodeFullRemoteServerRuntimeConfig): RemoteTargetIdentityResolution {
+  const target = opencodeFullRemoteProjectTargetShapeSchema.parse(config.remoteServer.projectTarget);
+
+  switch (target.mode) {
+    case "server_default":
+      return {
+        status: "resolved",
+        targetMode: "server_default",
+        resolvedTargetIdentity: "server_default",
+        directoryQuery: null,
+        message: "server_default is the safe baseline remote target identity for the current MVP remote mode.",
+      };
+    case "linked_project_context": {
+      const linkRef = config.remoteServer.linkRef;
+      if (!linkRef) {
+        return {
+          status: "invalid",
+          targetMode: "linked_project_context",
+          code: "TARGET_LINK_REF_REQUIRED",
+          message: "linked_project_context requires plugin-derived linkRef runtime metadata.",
+        };
+      }
+      if (!linkRef.linkedDirectoryHint.trim()) {
+        return {
+          status: "invalid",
+          targetMode: "linked_project_context",
+          code: "TARGET_LINK_MISSING_HINT",
+          message: "linked_project_context requires a non-empty linked directory hint.",
+        };
+      }
+      return {
+        status: "resolved",
+        targetMode: "linked_project_context",
+        resolvedTargetIdentity: `linked_project_context:${linkRef.canonicalWorkspaceId}:${linkRef.linkedDirectoryHint}`,
+        directoryQuery: linkRef.linkedDirectoryHint,
+        message: "linked_project_context resolves to the plugin-derived linked directory hint for MVP write-path targeting.",
+      };
+    }
+  }
+}
 
 export function resolveRemoteTargetIdentity(rawTarget: unknown): RemoteTargetIdentityResolution {
   const target = opencodeFullRemoteProjectTargetShapeSchema.parse(rawTarget);
@@ -33,50 +69,21 @@ export function resolveRemoteTargetIdentity(rawTarget: unknown): RemoteTargetIde
         status: "resolved",
         targetMode: "server_default",
         resolvedTargetIdentity: "server_default",
+        directoryQuery: null,
         message: "server_default is the safe baseline remote target identity for the current MVP remote mode.",
       };
-    case "paperclip_workspace":
+    case "linked_project_context":
       return {
-        status: "conditional",
-        targetMode: "paperclip_workspace",
-        code: "TARGET_MODE_REQUIRES_RUNTIME_PROBE",
-        message: "paperclip_workspace remains conditional until a separate workspace-aware runtime probe contract exists.",
-      };
-    case "server_managed_namespace":
-      return {
-        status: "conditional",
-        targetMode: "server_managed_namespace",
-        code: "TARGET_MODE_REQUIRES_SERVER_ISOLATION_PROOF",
-        message: "server_managed_namespace remains conditional until server-side namespace isolation is proven safe.",
-      };
-    case "fixed_path":
-      if (target.requireDedicatedServer) {
-        return {
-          status: "conditional",
-          targetMode: "fixed_path",
-          code: "TARGET_MODE_REQUIRES_DEDICATED_SERVER",
-          message: "fixed_path remains conditional and requires a dedicated single-company server assertion before it can be considered safe.",
-        };
-      }
-
-      return {
-        status: "unsupported",
-        targetMode: "fixed_path",
-        code: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
-        message: "fixed_path is unsupported for shared/unknown-scope servers because path isolation is not proven safe.",
+        status: "invalid",
+        targetMode: "linked_project_context",
+        code: "TARGET_LINK_REF_REQUIRED",
+        message: "linked_project_context requires full runtime config to resolve linked directory targeting.",
       };
   }
-
-  return {
-    status: "unsupported",
-    targetMode: "fixed_path",
-    code: "TARGET_MODE_UNSUPPORTED_SHARED_SERVER_PATH",
-    message: "Unsupported remote target mode.",
-  };
 }
 
 export function isRemoteTargetModeResolved(rawTarget: unknown): boolean {
-  return resolveRemoteTargetIdentity(rawTarget).status === "resolved";
+  return opencodeFullRemoteProjectTargetShapeSchema.parse(rawTarget).mode === "server_default";
 }
 
 export function getRemoteTargetMode(rawTarget: unknown): OpencodeFullRemoteProjectTarget["mode"] {
@@ -84,5 +91,6 @@ export function getRemoteTargetMode(rawTarget: unknown): OpencodeFullRemoteProje
 }
 
 export function isExecutableRemoteTarget(rawTarget: unknown): boolean {
-  return resolveRemoteTargetIdentity(rawTarget).status === "resolved";
+  const mode = opencodeFullRemoteProjectTargetShapeSchema.parse(rawTarget).mode;
+  return mode === "server_default" || mode === "linked_project_context";
 }

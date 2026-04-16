@@ -108,6 +108,59 @@ describe("opencode_full remote execute", () => {
     });
   });
 
+  it("passes linked directory targeting through remote create/message flow", async () => {
+    const linkedConfig = {
+      ...config,
+      remoteServer: {
+        ...config.remoteServer,
+        projectTarget: { mode: "linked_project_context" as const },
+        linkRef: {
+          mode: "linked_project_context" as const,
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared" as const,
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    };
+
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.createRemoteSession.mockResolvedValue({ ok: true, status: 200, text: "", data: { id: "ses-linked" } });
+    mocked.postRemoteSessionMessage.mockResolvedValue({ ok: true, status: 200, text: "", data: { info: {}, parts: [{ text: "hello linked" }] } });
+    mocked.getRemoteSessionMessages.mockResolvedValue({ ok: true, status: 200, text: "", data: [{ parts: [{ text: "hello linked" }] }] });
+
+    const result = await executeRemoteServer(ctx(), linkedConfig as never);
+
+    expect(mocked.createRemoteSession).toHaveBeenCalledWith(linkedConfig, {});
+    expect(mocked.postRemoteSessionMessage).toHaveBeenCalledWith(
+      linkedConfig,
+      "ses-linked",
+      expect.any(Object),
+    );
+    expect(mocked.getRemoteSessionMessages).toHaveBeenCalledWith(linkedConfig, "ses-linked");
+    expect(result.sessionParams).toMatchObject({
+      projectTargetMode: "linked_project_context",
+      resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/tmp/forgebox",
+      canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+      linkedDirectoryHint: "/tmp/forgebox",
+    });
+  });
+
+  it("fails early when linked_project_context runtime metadata is incomplete", async () => {
+    const result = await executeRemoteServer(ctx(), {
+      ...config,
+      remoteServer: {
+        ...config.remoteServer,
+        projectTarget: { mode: "linked_project_context" },
+      },
+    } as never);
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      errorCode: "TARGET_ISOLATION_FAILED",
+    });
+  });
+
   it("refuses unresolved auth branches beyond none", async () => {
     const result = await executeRemoteServer(ctx(), {
       ...config,
@@ -150,6 +203,55 @@ describe("opencode_full remote execute", () => {
 
     expect(onLog).toHaveBeenCalledWith("stdout", expect.stringContaining("Remote session resume refused"));
     expect(result.sessionId).toBe("ses-2");
+  });
+
+  it("starts fresh when linked target metadata no longer matches the saved session", async () => {
+    const linkedConfig = {
+      ...config,
+      remoteServer: {
+        ...config.remoteServer,
+        projectTarget: { mode: "linked_project_context" as const },
+        linkRef: {
+          mode: "linked_project_context" as const,
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared" as const,
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    };
+
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.createRemoteSession.mockResolvedValue({ ok: true, status: 200, text: "", data: { id: "ses-fresh" } });
+    mocked.postRemoteSessionMessage.mockResolvedValue({ ok: true, status: 200, text: "", data: { info: {}, parts: [{ text: "fresh linked" }] } });
+    mocked.getRemoteSessionMessages.mockResolvedValue({ ok: true, status: 200, text: "", data: [{ parts: [{ text: "fresh linked" }] }] });
+    const onLog = vi.fn(async () => {});
+
+    const result = await executeRemoteServer(ctx({
+      onLog,
+      runtime: {
+        sessionId: "ses-old",
+        sessionDisplayId: "ses-old",
+        taskKey: null,
+        sessionParams: {
+          executionMode: "remote_server",
+          sessionId: "ses-old",
+          remoteSessionId: "ses-old",
+          companyId: "company-1",
+          agentId: "agent-1",
+          adapterType: "opencode_full",
+          configFingerprint: "bad-fingerprint",
+          baseUrl: "https://opencode.example.com",
+          projectTargetMode: "linked_project_context",
+          resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/tmp/other",
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/other",
+        },
+      },
+    }), linkedConfig as never);
+
+    expect(onLog).toHaveBeenCalledWith("stdout", expect.stringContaining("Remote session resume refused"));
+    expect(result.sessionId).toBe("ses-fresh");
   });
 
   it("normalizes ownership and target isolation failures distinctly", async () => {

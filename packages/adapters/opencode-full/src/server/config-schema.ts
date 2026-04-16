@@ -47,43 +47,20 @@ export const opencodeFullRemoteAuthPersistedSchema = z.discriminatedUnion("mode"
   }),
 ]);
 
-export const opencodeFullRemoteProjectTargetShapeSchema = z.object({
-  mode: z.enum([
-    "server_default",
-    "paperclip_workspace",
-    "server_managed_namespace",
-    "fixed_path",
-  ]).default("server_default"),
-  projectPath: z.string().trim().min(1).optional(),
-  namespaceTemplate: z.string().trim().min(1).optional(),
-  requireDedicatedServer: z.boolean().default(false),
-}).superRefine((value, ctx) => {
-  if (value.mode === "fixed_path" && !value.projectPath) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["projectPath"],
-      message: "projectPath is required when mode=fixed_path",
-    });
-  }
+export const opencodeFullLinkedRemoteTargetSchema = z.object({
+  mode: z.literal("linked_project_context"),
+  canonicalWorkspaceId: z.string().uuid(),
+  linkedDirectoryHint: z.string().trim().min(1),
+  serverScope: z.enum(["shared", "dedicated_single_company", "unknown"]),
+  validatedAt: z.string().datetime(),
+}).strict();
 
-  if (value.mode === "server_managed_namespace" && !value.namespaceTemplate) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["namespaceTemplate"],
-      message: "namespaceTemplate is required when mode=server_managed_namespace",
-    });
-  }
-});
+export const opencodeFullRemoteProjectTargetShapeSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("server_default") }).strict(),
+  z.object({ mode: z.literal("linked_project_context") }).strict(),
+]);
 
-export const opencodeFullRemoteProjectTargetSchema = opencodeFullRemoteProjectTargetShapeSchema.superRefine((value, ctx) => {
-  if (value.mode !== "server_default") {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["mode"],
-      message: "MVP currently validates only projectTarget.mode=server_default",
-    });
-  }
-});
+export const opencodeFullRemoteProjectTargetSchema = opencodeFullRemoteProjectTargetShapeSchema;
 
 export const opencodeFullRemoteServerPersistedConfigSchema = z.object({
   baseUrl: z.string().trim().url().superRefine((value, ctx) => {
@@ -99,6 +76,23 @@ export const opencodeFullRemoteServerPersistedConfigSchema = z.object({
   healthTimeoutSec: z.number().int().positive().default(10),
   requireHealthyServer: z.boolean().default(true),
   projectTarget: opencodeFullRemoteProjectTargetSchema.default({ mode: "server_default" }),
+  linkRef: opencodeFullLinkedRemoteTargetSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (value.projectTarget.mode === "linked_project_context" && !value.linkRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["linkRef"],
+      message: "linkRef is required when projectTarget.mode=linked_project_context",
+    });
+  }
+
+  if (value.projectTarget.mode === "server_default" && value.linkRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["linkRef"],
+      message: "linkRef must be omitted when projectTarget.mode=server_default",
+    });
+  }
 });
 
 export const opencodeFullLocalSdkPersistedConfigSchema = z.object({
@@ -322,15 +316,23 @@ export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
         group: "Remote server",
         options: [
           { value: "server_default", label: "server_default (MVP supported)" },
+          { value: "linked_project_context", label: "linked_project_context (plugin-derived)" },
         ],
-        hint: "Remote MVP supports only server_default. Broader targeting remains out of scope.",
+        hint: "Remote MVP supports server_default and plugin-derived linked_project_context using directory hints only.",
       },
       {
         key: "remoteServer.projectTarget",
         label: "Remote server · Project target",
         type: "textarea",
         group: "Remote server",
-        hint: "JSON object. MVP validation currently accepts only {\"mode\":\"server_default\"}.",
+        hint: "JSON object. MVP accepts {\"mode\":\"server_default\"} or {\"mode\":\"linked_project_context\"} with plugin-derived linkRef.",
+      },
+      {
+        key: "remoteServer.linkRef",
+        label: "Remote server · Link reference",
+        type: "textarea",
+        group: "Remote server",
+        hint: "Plugin-derived linked project context metadata for linked_project_context mode.",
       },
       {
         key: "localSdk.sdkProviderHint",

@@ -27,6 +27,74 @@ describe("opencodeFull runtime schema", () => {
     expect(parsed.remoteServer.auth.mode).toBe("basic");
   });
 
+  it("accepts linked_project_context only when runtime linkRef is present", () => {
+    const success = opencodeFullRuntimeConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    });
+
+    const missingLinkRef = opencodeFullRuntimeConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "linked_project_context" },
+      },
+    });
+
+    const extraLinkRef = opencodeFullRuntimeConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "server_default" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(success.success).toBe(true);
+    expect(missingLinkRef.success).toBe(false);
+    expect(extraLinkRef.success).toBe(false);
+  });
+
   it("rejects persisted secret-ref objects in remote auth at runtime", () => {
     const result = opencodeFullRuntimeConfigSchema.safeParse({
       executionMode: "remote_server",

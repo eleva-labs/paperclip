@@ -5,7 +5,7 @@ import type {
 } from "@paperclipai/adapter-utils";
 import type { OpencodeFullRemoteServerRuntimeConfig } from "./runtime-schema.js";
 import { validateResolvedRemoteAuth } from "./remote-auth.js";
-import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { resolveLinkedRemoteTarget } from "./remote-targeting.js";
 import { checkRemoteServerHealth } from "./models.js";
 import { ensureRemoteServerOpenCodeModelConfiguredAndAvailable, discoverRemoteServerOpenCodeModels } from "./remote-models.js";
 
@@ -38,13 +38,13 @@ export async function testRemoteServerEnvironment(
     return { adapterType: "opencode_full", status: status(checks), checks, testedAt };
   }
 
-  const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
+  const target = resolveLinkedRemoteTarget(config);
   if (target.status !== "resolved") {
     checks.push({
       code: "opencode_remote_target_not_proven",
-      level: target.status === "conditional" ? "warn" : "error",
+      level: "error",
       message: target.message,
-      detail: `Config-only remote_server checks will not approximate target mode ${target.targetMode}; MVP execution support remains limited to server_default only.`,
+      detail: `Remote runtime target mode ${target.targetMode} could not be resolved from the current config/runtime metadata.`,
     });
     return { adapterType: "opencode_full", status: status(checks), checks, testedAt };
   }

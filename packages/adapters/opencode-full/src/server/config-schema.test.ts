@@ -74,18 +74,54 @@ describe("opencodeFull config schemas", () => {
     expect(parsed).not.toHaveProperty("remoteServer");
   });
 
-  it("rejects non-server_default persisted remote targets for MVP", () => {
-    const result = opencodeFullPersistedConfigSchema.safeParse({
+  it("accepts linked_project_context only when plugin-derived linkRef is present", () => {
+    const success = opencodeFullPersistedConfigSchema.safeParse({
       executionMode: "remote_server",
       model: "openai/gpt-5.4",
       remoteServer: {
         baseUrl: "https://opencode.example.com",
         auth: { mode: "none" },
-        projectTarget: { mode: "paperclip_workspace" },
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
       },
     });
 
-    expect(result.success).toBe(false);
+    const missingLinkRef = opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "linked_project_context" },
+      },
+    });
+
+    const extraLinkRef = opencodeFullPersistedConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      remoteServer: {
+        baseUrl: "https://opencode.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/tmp/forgebox",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(success.success).toBe(true);
+    expect(missingLinkRef.success).toBe(false);
+    expect(extraLinkRef.success).toBe(false);
   });
 
   it("rejects endpoint-specific remote base URLs while preserving server base paths", () => {
@@ -167,10 +203,11 @@ describe("opencodeFull config schemas", () => {
       "remoteServer.auth.mode",
       "remoteServer.auth.token",
       "remoteServer.auth",
-      "remoteServer.projectTarget.mode",
-      "remoteServer.projectTarget",
-      "localSdk.sdkProviderHint",
-    ]));
+        "remoteServer.projectTarget.mode",
+        "remoteServer.projectTarget",
+        "remoteServer.linkRef",
+        "localSdk.sdkProviderHint",
+      ]));
   });
 
   it("rejects unresolved secret-binding objects in the runtime schema", () => {

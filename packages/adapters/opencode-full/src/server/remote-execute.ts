@@ -14,7 +14,7 @@ import {
   readSessionId,
   readUsage,
 } from "./remote-client.js";
-import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { resolveLinkedRemoteTarget } from "./remote-targeting.js";
 import { validateResolvedRemoteAuth } from "./remote-auth.js";
 
 function provider(model: string) {
@@ -97,8 +97,8 @@ export async function executeRemoteServer(
   ctx: AdapterExecutionContext,
   config: OpencodeFullRemoteServerRuntimeConfig,
 ): Promise<AdapterExecutionResult> {
-  const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
-  if (target.status !== "resolved") return failure("target", target.message);
+  const target = resolveLinkedRemoteTarget(config);
+  if (target.status !== "resolved") return failure("target", target.message, { code: target.code });
 
   const auth = validateResolvedRemoteAuth(config.remoteServer.auth);
   if (!auth.ok) return failure("auth_unresolved", auth.reason);
@@ -158,11 +158,14 @@ export async function executeRemoteServer(
       adapterType: "opencode_full",
       command: "remote_server",
       cwd: config.remoteServer.baseUrl,
-      commandArgs: ["POST", "/session", "POST", `/session/${sessionId}/message`],
+      commandArgs: target.directoryQuery
+        ? ["POST", `/session?directory=${target.directoryQuery}`, "POST", `/session/${sessionId}/message?directory=${target.directoryQuery}`]
+        : ["POST", "/session", "POST", `/session/${sessionId}/message`],
       commandNotes: [
         `Execution mode: ${config.executionMode}`,
         `Remote base URL: ${config.remoteServer.baseUrl}`,
         `Remote target mode: ${target.targetMode}`,
+        target.directoryQuery ? `Remote directory hint: ${target.directoryQuery}` : "No directory hint required",
         sessionId === prior && prior ? `Resume requested for remote session ${prior}` : "Fresh remote session requested",
       ],
       env: {},
@@ -191,6 +194,8 @@ export async function executeRemoteServer(
       agentId: ctx.agent.id,
       config,
       remoteSessionId: sessionId,
+      canonicalWorkspaceId: config.remoteServer.linkRef?.canonicalWorkspaceId ?? null,
+      linkedDirectoryHint: target.directoryQuery,
     });
     return {
       exitCode: 0,

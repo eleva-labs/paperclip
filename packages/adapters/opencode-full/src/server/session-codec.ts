@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { opencodeFullRuntimeConfigSchema } from "./runtime-schema.js";
-import { resolveRemoteTargetIdentity } from "./remote-targeting.js";
+import { resolveLinkedRemoteTarget } from "./remote-targeting.js";
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -96,7 +96,7 @@ export const opencodeFullLocalCliSessionParamsSchema = z.object({
   repoRef: z.string().min(1).optional(),
 });
 
-export const opencodeFullRemoteSessionParamsSchema = z.object({
+const opencodeFullRemoteSessionParamsShapeSchema = z.object({
   executionMode: z.literal("remote_server"),
   sessionId: z.string().min(1),
   remoteSessionId: z.string().min(1).optional(),
@@ -108,11 +108,51 @@ export const opencodeFullRemoteSessionParamsSchema = z.object({
     executionMode: z.literal("remote_server"),
   }).optional(),
   baseUrl: z.string().url(),
-  projectTargetMode: z.literal("server_default"),
+  projectTargetMode: z.enum(["server_default", "linked_project_context"]),
   resolvedTargetIdentity: z.string().min(1),
+  canonicalWorkspaceId: z.string().uuid().optional(),
+  linkedDirectoryHint: z.string().trim().min(1).optional(),
 });
 
-export const opencodeFullSessionParamsSchema = z.discriminatedUnion("executionMode", [
+export const opencodeFullRemoteSessionParamsSchema = opencodeFullRemoteSessionParamsShapeSchema.superRefine((value, ctx) => {
+  if (value.projectTargetMode === "linked_project_context") {
+    if (!value.canonicalWorkspaceId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canonicalWorkspaceId"],
+        message: "canonicalWorkspaceId is required when projectTargetMode=linked_project_context",
+      });
+    }
+
+    if (!value.linkedDirectoryHint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["linkedDirectoryHint"],
+        message: "linkedDirectoryHint is required when projectTargetMode=linked_project_context",
+      });
+    }
+
+    return;
+  }
+
+  if (value.canonicalWorkspaceId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["canonicalWorkspaceId"],
+      message: "canonicalWorkspaceId must be omitted when projectTargetMode=server_default",
+    });
+  }
+
+  if (value.linkedDirectoryHint) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["linkedDirectoryHint"],
+      message: "linkedDirectoryHint must be omitted when projectTargetMode=server_default",
+    });
+  }
+});
+
+export const opencodeFullSessionParamsSchema = z.union([
   opencodeFullLocalCliSessionParamsSchema,
   opencodeFullRemoteSessionParamsSchema,
 ]);
@@ -122,6 +162,10 @@ export type OpencodeFullSessionParams = z.infer<typeof opencodeFullSessionParams
 export type OpencodeFullSessionOwnership = z.infer<typeof opencodeFullSessionOwnershipSchema>;
 
 function normalizeResolvedTargetIdentity(value: string): string {
+  return value.trim();
+}
+
+function normalizeLinkedDirectoryHint(value: string): string {
   return value.trim();
 }
 
@@ -145,8 +189,7 @@ export function createRemoteSessionParams(input: {
   config: unknown;
   remoteSessionId: string;
   canonicalWorkspaceId?: string | null;
-  canonicalWorkspaceCwd?: string | null;
-  serverScope?: "shared" | "dedicated_single_company" | "unknown";
+  linkedDirectoryHint?: string | null;
   createdAt?: string;
 }): OpencodeFullRemoteSessionParams {
   const config = opencodeFullRuntimeConfigSchema.parse(input.config);
@@ -154,10 +197,13 @@ export function createRemoteSessionParams(input: {
     throw new Error("createRemoteSessionParams requires executionMode=remote_server");
   }
 
-  const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
+  const target = resolveLinkedRemoteTarget(config);
   if (target.status !== "resolved") {
     throw new Error(target.message);
   }
+
+  const canonicalWorkspaceId = input.canonicalWorkspaceId ?? config.remoteServer.linkRef?.canonicalWorkspaceId ?? undefined;
+  const linkedDirectoryHint = input.linkedDirectoryHint ?? target.directoryQuery ?? undefined;
 
   return {
     executionMode: "remote_server",
@@ -174,6 +220,10 @@ export function createRemoteSessionParams(input: {
     baseUrl: config.remoteServer.baseUrl,
     projectTargetMode: target.targetMode,
     resolvedTargetIdentity: normalizeResolvedTargetIdentity(target.resolvedTargetIdentity),
+    canonicalWorkspaceId: target.targetMode === "linked_project_context" ? canonicalWorkspaceId : undefined,
+    linkedDirectoryHint: target.targetMode === "linked_project_context" && linkedDirectoryHint
+      ? normalizeLinkedDirectoryHint(linkedDirectoryHint)
+      : undefined,
   };
 }
 
@@ -191,8 +241,15 @@ export function canResumeRemoteSession(input: {
   }
   if (config.executionMode !== "remote_server") return { ok: false, reason: "execution_mode_mismatch" };
 
-  const target = resolveRemoteTargetIdentity(config.remoteServer.projectTarget);
+  const target = resolveLinkedRemoteTarget(config);
   if (target.status !== "resolved") return { ok: false, reason: target.code };
+
+  const expectedCanonicalWorkspaceId = target.targetMode === "linked_project_context"
+    ? (config.remoteServer.linkRef?.canonicalWorkspaceId ?? null)
+    : null;
+  const expectedLinkedDirectoryHint = target.targetMode === "linked_project_context"
+    ? (target.directoryQuery ? normalizeLinkedDirectoryHint(target.directoryQuery) : null)
+    : null;
 
   const expectedFingerprint = getConfigFingerprint(config);
   const checks: Array<[boolean, string]> = [
@@ -204,6 +261,14 @@ export function canResumeRemoteSession(input: {
     [session.data.configFingerprint === expectedFingerprint, "config_fingerprint_mismatch"],
     [session.data.projectTargetMode === target.targetMode, "target_mode_mismatch"],
     [session.data.resolvedTargetIdentity === normalizeResolvedTargetIdentity(target.resolvedTargetIdentity), "resolved_target_identity_mismatch"],
+    [
+      (session.data.canonicalWorkspaceId ?? null) === expectedCanonicalWorkspaceId,
+      "canonical_workspace_id_mismatch",
+    ],
+    [
+      (session.data.linkedDirectoryHint ? normalizeLinkedDirectoryHint(session.data.linkedDirectoryHint) : null) === expectedLinkedDirectoryHint,
+      "linked_directory_hint_mismatch",
+    ],
   ];
 
   for (const [ok, reason] of checks) {
@@ -283,6 +348,10 @@ export const sessionCodec = {
       resolvedTargetIdentity: typeof raw.resolvedTargetIdentity === "string"
         ? normalizeResolvedTargetIdentity(raw.resolvedTargetIdentity)
         : raw.resolvedTargetIdentity,
+      canonicalWorkspaceId: raw.canonicalWorkspaceId,
+      linkedDirectoryHint: typeof raw.linkedDirectoryHint === "string"
+        ? normalizeLinkedDirectoryHint(raw.linkedDirectoryHint)
+        : raw.linkedDirectoryHint,
     });
 
     return parsed.success ? parsed.data : null;
