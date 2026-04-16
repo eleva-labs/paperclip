@@ -115,7 +115,17 @@ describe("buildImportPlan", () => {
             executionMode: "local_cli",
             model: "openai/gpt-5.4",
             promptTemplate: "# Researcher\n",
-            localCli: expect.objectContaining({ allowProjectConfig: true }),
+            timeoutSec: 120,
+            connectTimeoutSec: 10,
+            eventStreamIdleTimeoutSec: 30,
+            failFastWhenUnavailable: true,
+            localCli: expect.objectContaining({
+              command: "opencode",
+              allowProjectConfig: true,
+              dangerouslySkipPermissions: false,
+              graceSec: 5,
+              env: {},
+            }),
           }),
           metadata: expect.objectContaining({
             importRole: "facade_entrypoint",
@@ -780,13 +790,64 @@ describe("buildImportPlan", () => {
           executionMode: "remote_server",
           model: "openai/gpt-5.4",
           promptTemplate: "# Orchestrator\n",
+          timeoutSec: 120,
+          connectTimeoutSec: 10,
+          eventStreamIdleTimeoutSec: 30,
+          failFastWhenUnavailable: true,
           remoteServer: expect.objectContaining({
             baseUrl: "https://example.com/opencode",
             auth: { mode: "none" },
+            healthTimeoutSec: 10,
+            requireHealthyServer: true,
             projectTarget: { mode: "server_default" },
           }),
         }),
       }),
     }));
+  });
+
+  it("hydrates full local_cli defaults for newly imported opencode_full agents", () => {
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["orchestrator"],
+      importedAt,
+      existingState: makeState(),
+      existingAgents: [],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "orchestrator",
+          displayName: "Orchestrator",
+          role: null,
+          repoRelPath: ".opencode/agents/orchestrator.md",
+          instructionsMarkdown: "# Orchestrator\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-orchestrator",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts[0]?.payload.adapterConfig).toEqual({
+      executionMode: "local_cli",
+      model: DEFAULT_OPENCODE_PROJECT_LOCAL_MODEL,
+      promptTemplate: "# Orchestrator\n",
+      timeoutSec: 120,
+      connectTimeoutSec: 10,
+      eventStreamIdleTimeoutSec: 30,
+      failFastWhenUnavailable: true,
+      localCli: {
+        command: "opencode",
+        allowProjectConfig: true,
+        dangerouslySkipPermissions: false,
+        graceSec: 5,
+        env: {},
+      },
+    });
   });
 });

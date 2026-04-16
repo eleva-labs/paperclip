@@ -27,6 +27,7 @@ type ParsedJsonlResult = {
   usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
   costUsd: number;
   errorMessage: string | null;
+  toolErrors: string[];
 };
 
 export type LocalCliSessionParams = {
@@ -86,6 +87,7 @@ export function parseOpenCodeJsonl(stdout: string): ParsedJsonlResult {
   let sessionId: string | null = null;
   const messages: string[] = [];
   const errors: string[] = [];
+  const toolErrors: string[] = [];
   const usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   let costUsd = 0;
 
@@ -120,7 +122,7 @@ export function parseOpenCodeJsonl(stdout: string): ParsedJsonlResult {
       const state = parseObject(part.state);
       if (asString(state.status, "") === "error") {
         const text = asString(state.error, "").trim();
-        if (text) errors.push(text);
+        if (text) toolErrors.push(text);
       }
       continue;
     }
@@ -136,6 +138,7 @@ export function parseOpenCodeJsonl(stdout: string): ParsedJsonlResult {
     usage,
     costUsd,
     errorMessage: errors.length > 0 ? errors.join("\n") : null,
+    toolErrors,
   };
 }
 
@@ -384,7 +387,11 @@ export async function executeLocalCli(
                     ? "UNAVAILABLE"
                     : "EXECUTION_FAILED",
               errorMessage: (synthesizedExitCode ?? 0) === 0 ? null : fallbackErrorMessage,
-              errorMeta: { warnings: execution.warnings, executionMode: "local_cli" },
+              errorMeta: {
+                warnings: execution.warnings,
+                executionMode: "local_cli",
+                ...(attempt.parsed.toolErrors.length > 0 ? { toolErrors: attempt.parsed.toolErrors } : {}),
+              },
               usage: {
                 inputTokens: attempt.parsed.usage.inputTokens,
                 outputTokens: attempt.parsed.usage.outputTokens,
@@ -401,6 +408,7 @@ export async function executeLocalCli(
               resultJson: {
                 stdout: attempt.proc.stdout,
                 stderr: attempt.proc.stderr,
+                ...(attempt.parsed.toolErrors.length > 0 ? { toolErrors: attempt.parsed.toolErrors } : {}),
               },
               summary: attempt.parsed.summary,
               clearSession: Boolean(clearSessionOnMissingSession && !attempt.parsed.sessionId),

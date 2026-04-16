@@ -9,6 +9,14 @@ import { importedOpencodeAgentMetadataSchema } from "./schemas.js";
 import type { DiscoveredRepoAgent, DiscoveryWarning } from "./discovery.js";
 
 const DEFAULT_OPENCODE_FULL_EXECUTION_MODE = "local_cli" as const;
+const DEFAULT_OPENCODE_FULL_TIMEOUT_SEC = 120;
+const DEFAULT_OPENCODE_FULL_CONNECT_TIMEOUT_SEC = 10;
+const DEFAULT_OPENCODE_FULL_EVENT_STREAM_IDLE_TIMEOUT_SEC = 30;
+const DEFAULT_OPENCODE_FULL_FAIL_FAST_WHEN_UNAVAILABLE = true;
+const DEFAULT_OPENCODE_FULL_LOCAL_CLI_COMMAND = "opencode";
+const DEFAULT_OPENCODE_FULL_LOCAL_CLI_GRACE_SEC = 5;
+const DEFAULT_OPENCODE_FULL_REMOTE_HEALTH_TIMEOUT_SEC = 10;
+const DEFAULT_OPENCODE_FULL_REMOTE_REQUIRE_HEALTHY_SERVER = true;
 
 export type MinimalPaperclipAgent = {
   id: string;
@@ -153,6 +161,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function withSharedOpencodeFullDefaults(baseConfig: Record<string, unknown>): Record<string, unknown> {
+  return {
+    timeoutSec: DEFAULT_OPENCODE_FULL_TIMEOUT_SEC,
+    connectTimeoutSec: DEFAULT_OPENCODE_FULL_CONNECT_TIMEOUT_SEC,
+    eventStreamIdleTimeoutSec: DEFAULT_OPENCODE_FULL_EVENT_STREAM_IDLE_TIMEOUT_SEC,
+    failFastWhenUnavailable: DEFAULT_OPENCODE_FULL_FAIL_FAST_WHEN_UNAVAILABLE,
+    ...baseConfig,
+  };
+}
+
 function buildImportedAgentAdapterConfig(input: {
   discoveredAgent: DiscoveredRepoAgent;
   existing: MinimalPaperclipAgent | null;
@@ -186,24 +204,37 @@ function buildImportedAgentAdapterConfig(input: {
 
   if (executionMode === "remote_server") {
     const remoteServer = asRecord(existingConfig.remoteServer) ?? {};
-    baseConfig.remoteServer = {
-      ...remoteServer,
-      auth: asRecord(remoteServer.auth) ?? { mode: "none" },
-      projectTarget: { mode: "server_default" },
-    };
-    return baseConfig;
+    return withSharedOpencodeFullDefaults({
+      ...baseConfig,
+      remoteServer: {
+        ...remoteServer,
+        auth: asRecord(remoteServer.auth) ?? { mode: "none" },
+        healthTimeoutSec: DEFAULT_OPENCODE_FULL_REMOTE_HEALTH_TIMEOUT_SEC,
+        requireHealthyServer: DEFAULT_OPENCODE_FULL_REMOTE_REQUIRE_HEALTHY_SERVER,
+        ...remoteServer,
+        projectTarget: { mode: "server_default" },
+      },
+    });
   }
 
   if (executionMode === "local_sdk") {
-    baseConfig.localSdk = asRecord(existingConfig.localSdk) ?? {};
-    return baseConfig;
+    return withSharedOpencodeFullDefaults({
+      ...baseConfig,
+      localSdk: asRecord(existingConfig.localSdk) ?? {},
+    });
   }
 
-  baseConfig.localCli = {
-    allowProjectConfig: true,
-    ...asRecord(existingConfig.localCli),
-  };
-  return baseConfig;
+  return withSharedOpencodeFullDefaults({
+    ...baseConfig,
+    localCli: {
+      command: DEFAULT_OPENCODE_FULL_LOCAL_CLI_COMMAND,
+      allowProjectConfig: true,
+      dangerouslySkipPermissions: false,
+      graceSec: DEFAULT_OPENCODE_FULL_LOCAL_CLI_GRACE_SEC,
+      env: {},
+      ...asRecord(existingConfig.localCli),
+    },
+  });
 }
 
 export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {

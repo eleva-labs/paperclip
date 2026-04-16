@@ -139,6 +139,41 @@ describe("opencode_full local_cli local-execute", () => {
     expect(sessionCodec.deserialize(result.sessionParams ?? null)).toEqual(result.sessionParams);
   });
 
+  it("does not fail a successful run when only tool calls error", async () => {
+    mocked.ensureAbsoluteDirectory.mockResolvedValue(undefined);
+    mocked.ensureCommandResolvable.mockResolvedValue(undefined);
+    mocked.prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, notes: [], cleanup: vi.fn(async () => {}) });
+    mocked.ensureLocalCliOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.runChildProcess.mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: [
+        JSON.stringify({
+          type: "tool_use",
+          part: { state: { status: "error", error: "File not found: /repo/worktree/docs/engineering/README.md" } },
+        }),
+        JSON.stringify({ sessionID: "session-2", type: "text", part: { text: "delegated successfully" } }),
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await executeLocalCli(createExecutionContext(), localCliConfig);
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      timedOut: false,
+      errorMessage: null,
+      summary: "delegated successfully",
+      resultJson: expect.objectContaining({
+        toolErrors: ["File not found: /repo/worktree/docs/engineering/README.md"],
+      }),
+      errorMeta: expect.objectContaining({
+        toolErrors: ["File not found: /repo/worktree/docs/engineering/README.md"],
+      }),
+    });
+  });
+
   it("normalizes command failures into shared error families", async () => {
     mocked.ensureAbsoluteDirectory.mockResolvedValue(undefined);
     mocked.ensureCommandResolvable.mockRejectedValue(new Error("Command not found: opencode"));
