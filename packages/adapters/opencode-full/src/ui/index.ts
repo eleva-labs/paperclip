@@ -4,6 +4,16 @@ export { parseOpenCodeFullStdoutLine as parseStdoutLine } from "../ui-parser.js"
 
 export const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
 
+export type OpenCodeFullDerivedRemoteUiState = {
+  executionMode: "remote_server";
+  baseUrl: string | null;
+  authMode: "none" | "bearer" | "basic" | "header" | "unknown";
+  targetMode: "server_default" | "linked_project_context" | "unknown";
+  canonicalWorkspaceId: string | null;
+  linkedDirectoryHint: string | null;
+  pluginDerived: boolean;
+};
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -129,4 +139,54 @@ export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<stri
   }
 
   return config;
+}
+
+export function getOpenCodeFullDerivedRemoteUiState(
+  config: unknown,
+): OpenCodeFullDerivedRemoteUiState | null {
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    return null;
+  }
+
+  const record = config as Record<string, unknown>;
+  if (record.executionMode !== "remote_server") {
+    return null;
+  }
+
+  const remoteServer =
+    typeof record.remoteServer === "object" && record.remoteServer !== null && !Array.isArray(record.remoteServer)
+      ? (record.remoteServer as Record<string, unknown>)
+      : null;
+
+  const auth =
+    remoteServer && typeof remoteServer.auth === "object" && remoteServer.auth !== null && !Array.isArray(remoteServer.auth)
+      ? (remoteServer.auth as Record<string, unknown>)
+      : null;
+  const projectTarget =
+    remoteServer && typeof remoteServer.projectTarget === "object" && remoteServer.projectTarget !== null && !Array.isArray(remoteServer.projectTarget)
+      ? (remoteServer.projectTarget as Record<string, unknown>)
+      : null;
+  const linkRef =
+    remoteServer && typeof remoteServer.linkRef === "object" && remoteServer.linkRef !== null && !Array.isArray(remoteServer.linkRef)
+      ? (remoteServer.linkRef as Record<string, unknown>)
+      : null;
+
+  const authMode = auth?.mode;
+  const targetMode = projectTarget?.mode;
+
+  return {
+    executionMode: "remote_server",
+    baseUrl: asNonEmptyString(remoteServer?.baseUrl) ?? null,
+    authMode:
+      authMode === "none" || authMode === "bearer" || authMode === "basic" || authMode === "header"
+        ? authMode
+        : "unknown",
+    targetMode:
+      targetMode === "server_default" || targetMode === "linked_project_context"
+        ? targetMode
+        : "unknown",
+    canonicalWorkspaceId: asNonEmptyString(linkRef?.canonicalWorkspaceId) ?? null,
+    linkedDirectoryHint: asNonEmptyString(linkRef?.linkedDirectoryHint) ?? null,
+    pluginDerived: targetMode === "linked_project_context" && linkRef !== null,
+  };
 }
