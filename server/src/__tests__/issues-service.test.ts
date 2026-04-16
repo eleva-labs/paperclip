@@ -1182,3 +1182,123 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
     });
   });
 });
+
+describeEmbeddedPostgres("issueService agent project assignment", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issues-project-scope-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+    await ensureIssueRelationsTable(db);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(issueRelations);
+    await db.delete(issueInboxArchives);
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(executionWorkspaces);
+    await db.delete(projectWorkspaces);
+    await db.delete(projects);
+    await db.delete(agents);
+    await db.delete(instanceSettings);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function seedFixture() {
+    const companyId = randomUUID();
+    const scopedProjectId = randomUUID();
+    const otherProjectId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(projects).values([
+      { id: scopedProjectId, companyId, name: "Scoped project", status: "in_progress" },
+      { id: otherProjectId, companyId, name: "Other project", status: "in_progress" },
+    ]);
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "ScopedAgent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+      metadata: { projectId: scopedProjectId },
+    });
+
+    return { agentId, companyId, otherProjectId, scopedProjectId };
+  }
+
+  it("rejects issue creation for scoped agents without a matching project", async () => {
+    const { agentId, companyId, otherProjectId, scopedProjectId } = await seedFixture();
+
+    await expect(
+      svc.create(companyId, {
+        title: "Missing project",
+        assigneeAgentId: agentId,
+      }),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee project-scoped agent requires a project" });
+
+    await expect(
+      svc.create(companyId, {
+        title: "Wrong project",
+        projectId: otherProjectId,
+        assigneeAgentId: agentId,
+      }),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee agent must belong to the selected project" });
+
+    await expect(
+      svc.create(companyId, {
+        title: "Right project",
+        projectId: scopedProjectId,
+        assigneeAgentId: agentId,
+      }),
+    ).resolves.toMatchObject({ projectId: scopedProjectId, assigneeAgentId: agentId });
+  });
+
+  it("rejects reassignment and checkout when the issue project does not match the agent scope", async () => {
+    const { agentId, companyId, otherProjectId, scopedProjectId } = await seedFixture();
+
+    const mismatchedIssue = await svc.create(companyId, {
+      title: "Mismatched issue",
+      projectId: otherProjectId,
+    });
+
+    await expect(
+      svc.update(mismatchedIssue.id, { assigneeAgentId: agentId }),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee agent must belong to the selected project" });
+
+    await db.update(issues).set({ assigneeAgentId: agentId }).where(eq(issues.id, mismatchedIssue.id));
+
+    await expect(
+      svc.checkout(mismatchedIssue.id, agentId, ["todo"], null),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee agent must belong to the selected project" });
+
+    const matchingIssue = await svc.create(companyId, {
+      title: "Matching issue",
+      projectId: scopedProjectId,
+    });
+
+    await expect(
+      svc.update(matchingIssue.id, { assigneeAgentId: agentId }),
+    ).resolves.toMatchObject({ id: matchingIssue.id, assigneeAgentId: agentId });
+  });
+});

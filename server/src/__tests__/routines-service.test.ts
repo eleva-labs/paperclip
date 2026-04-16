@@ -780,3 +780,140 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(run.status).toBe("issue_created");
   });
 });
+
+describeEmbeddedPostgres("routine service agent project assignment", () => {
+  let db!: ReturnType<typeof createDb>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-routines-project-scope-");
+    db = createDb(tempDb.connectionString);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(activityLog);
+    await db.delete(routineRuns);
+    await db.delete(routineTriggers);
+    await db.delete(routines);
+    await db.delete(companySecretVersions);
+    await db.delete(companySecrets);
+    await db.delete(heartbeatRuns);
+    await db.delete(issues);
+    await db.delete(executionWorkspaces);
+    await db.delete(projectWorkspaces);
+    await db.delete(projects);
+    await db.delete(agents);
+    await db.delete(companies);
+    await db.delete(instanceSettings);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  async function seedScopedFixture() {
+    const companyId = randomUUID();
+    const scopedProjectId = randomUUID();
+    const otherProjectId = randomUUID();
+    const agentId = randomUUID();
+    const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(projects).values([
+      { id: scopedProjectId, companyId, name: "Scoped project", status: "in_progress" },
+      { id: otherProjectId, companyId, name: "Other project", status: "in_progress" },
+    ]);
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "ScopedAgent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+      metadata: { projectId: scopedProjectId },
+    });
+
+    const svc = routineService(db);
+    return { agentId, companyId, otherProjectId, scopedProjectId, svc };
+  }
+
+  it("rejects routine creation for scoped agents without a matching project", async () => {
+    const { agentId, companyId, otherProjectId, scopedProjectId, svc } = await seedScopedFixture();
+
+    await expect(
+      svc.create(companyId, {
+        projectId: null,
+        goalId: null,
+        parentIssueId: null,
+        title: "Missing project",
+        description: null,
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      }, {}),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee project-scoped agent requires a project" });
+
+    await expect(
+      svc.create(companyId, {
+        projectId: otherProjectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "Wrong project",
+        description: null,
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      }, {}),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee agent must belong to the selected project" });
+
+    await expect(
+      svc.create(companyId, {
+        projectId: scopedProjectId,
+        goalId: null,
+        parentIssueId: null,
+        title: "Right project",
+        description: null,
+        assigneeAgentId: agentId,
+        priority: "medium",
+        status: "active",
+        concurrencyPolicy: "coalesce_if_active",
+        catchUpPolicy: "skip_missed",
+      }, {}),
+    ).resolves.toMatchObject({ projectId: scopedProjectId, assigneeAgentId: agentId });
+  });
+
+  it("rejects routine updates that move scoped agents onto the wrong project", async () => {
+    const { agentId, companyId, otherProjectId, scopedProjectId, svc } = await seedScopedFixture();
+
+    const routine = await svc.create(companyId, {
+      projectId: scopedProjectId,
+      goalId: null,
+      parentIssueId: null,
+      title: "Scoped routine",
+      description: null,
+      assigneeAgentId: agentId,
+      priority: "medium",
+      status: "active",
+      concurrencyPolicy: "coalesce_if_active",
+      catchUpPolicy: "skip_missed",
+    }, {});
+
+    await expect(
+      svc.update(routine.id, { projectId: otherProjectId }, {}),
+    ).rejects.toMatchObject({ status: 422, message: "Assignee agent must belong to the selected project" });
+  });
+});

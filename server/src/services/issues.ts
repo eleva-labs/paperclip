@@ -35,6 +35,7 @@ import { instanceSettingsService } from "./instance-settings.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
+import { assertAssignableAgent as assertAssignableAgentForIssue } from "./agent-project-assignment.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -568,27 +569,15 @@ export function issueService(db: Db) {
     };
   }
 
-  async function assertAssignableAgent(companyId: string, agentId: string) {
-    const assignee = await db
-      .select({
-        id: agents.id,
-        companyId: agents.companyId,
-        status: agents.status,
-      })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .then((rows) => rows[0] ?? null);
-
-    if (!assignee) throw notFound("Assignee agent not found");
-    if (assignee.companyId !== companyId) {
-      throw unprocessable("Assignee must belong to same company");
-    }
-    if (assignee.status === "pending_approval") {
-      throw conflict("Cannot assign work to pending approval agents");
-    }
-    if (assignee.status === "terminated") {
-      throw conflict("Cannot assign work to terminated agents");
-    }
+  async function assertAssignableAgent(companyId: string, agentId: string, targetProjectId?: string | null) {
+    await assertAssignableAgentForIssue({
+      db,
+      companyId,
+      agentId,
+      targetProjectId,
+      pendingApprovalMessage: "Cannot assign work to pending approval agents",
+      terminatedMessage: "Cannot assign work to terminated agents",
+    });
   }
 
   async function assertAssignableUser(companyId: string, userId: string) {
@@ -1395,7 +1384,7 @@ export function issueService(db: Db) {
         throw unprocessable("Issue can only have one assignee");
       }
       if (data.assigneeAgentId) {
-        await assertAssignableAgent(companyId, data.assigneeAgentId);
+        await assertAssignableAgent(companyId, data.assigneeAgentId, data.projectId ?? null);
       }
       if (data.assigneeUserId) {
         await assertAssignableUser(companyId, data.assigneeUserId);
@@ -1605,17 +1594,19 @@ export function issueService(db: Db) {
       if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
-      if (issueData.assigneeAgentId) {
-        await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId);
-      }
-      if (issueData.assigneeUserId) {
-        await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
-      }
       const nextProjectId = issueData.projectId !== undefined ? issueData.projectId : existing.projectId;
       const nextProjectWorkspaceId =
         issueData.projectWorkspaceId !== undefined ? issueData.projectWorkspaceId : existing.projectWorkspaceId;
       const nextExecutionWorkspaceId =
         issueData.executionWorkspaceId !== undefined ? issueData.executionWorkspaceId : existing.executionWorkspaceId;
+      if (issueData.assigneeAgentId !== undefined || issueData.projectId !== undefined) {
+        if (nextAssigneeAgentId) {
+          await assertAssignableAgent(existing.companyId, nextAssigneeAgentId, nextProjectId);
+        }
+      }
+      if (issueData.assigneeUserId) {
+        await assertAssignableUser(existing.companyId, issueData.assigneeUserId);
+      }
       if (nextProjectWorkspaceId) {
         await assertValidProjectWorkspace(existing.companyId, nextProjectId, nextProjectWorkspaceId);
       }
@@ -1732,12 +1723,12 @@ export function issueService(db: Db) {
 
     checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
       const issueCompany = await db
-        .select({ companyId: issues.companyId })
+        .select({ companyId: issues.companyId, projectId: issues.projectId })
         .from(issues)
         .where(eq(issues.id, id))
         .then((rows) => rows[0] ?? null);
       if (!issueCompany) throw notFound("Issue not found");
-      await assertAssignableAgent(issueCompany.companyId, agentId);
+      await assertAssignableAgent(issueCompany.companyId, agentId, issueCompany.projectId);
 
       const now = new Date();
 
