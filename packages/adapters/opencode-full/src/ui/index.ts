@@ -2,6 +2,8 @@ import type { CreateConfigValues } from "@paperclipai/adapter-utils";
 
 export { parseOpenCodeFullStdoutLine as parseStdoutLine } from "../ui-parser.js";
 
+export const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -82,15 +84,21 @@ export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<stri
   const config: Record<string, unknown> = {
     executionMode,
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : values.model,
+    timeoutSec: typeof raw.timeoutSec === "number" ? raw.timeoutSec : 120,
+    connectTimeoutSec: typeof raw.connectTimeoutSec === "number" ? raw.connectTimeoutSec : 10,
+    eventStreamIdleTimeoutSec:
+      typeof raw.eventStreamIdleTimeoutSec === "number"
+        ? raw.eventStreamIdleTimeoutSec
+        : 30,
+    failFastWhenUnavailable:
+      typeof raw.failFastWhenUnavailable === "boolean"
+        ? raw.failFastWhenUnavailable
+        : true,
   };
 
   if (typeof raw.variant === "string" && raw.variant.trim()) config.variant = raw.variant.trim();
   if (typeof raw.promptTemplate === "string") config.promptTemplate = raw.promptTemplate;
   if (typeof raw.bootstrapPromptTemplate === "string") config.bootstrapPromptTemplate = raw.bootstrapPromptTemplate;
-  if (typeof raw.timeoutSec === "number") config.timeoutSec = raw.timeoutSec;
-  if (typeof raw.connectTimeoutSec === "number") config.connectTimeoutSec = raw.connectTimeoutSec;
-  if (typeof raw.eventStreamIdleTimeoutSec === "number") config.eventStreamIdleTimeoutSec = raw.eventStreamIdleTimeoutSec;
-  if (typeof raw.failFastWhenUnavailable === "boolean") config.failFastWhenUnavailable = raw.failFastWhenUnavailable;
 
   if (executionMode === "local_cli") {
     config.localCli = {
@@ -98,7 +106,7 @@ export function buildOpenCodeFullConfig(values: CreateConfigValues): Record<stri
       allowProjectConfig: raw["localCli.allowProjectConfig"] ?? true,
       dangerouslySkipPermissions: raw["localCli.dangerouslySkipPermissions"] ?? false,
       graceSec: raw["localCli.graceSec"] ?? 5,
-      env: parseJsonObject(raw["localCli.env"]),
+      env: parseJsonObject(raw["localCli.env"]) ?? {},
     };
   } else if (executionMode === "remote_server") {
     config.remoteServer = {

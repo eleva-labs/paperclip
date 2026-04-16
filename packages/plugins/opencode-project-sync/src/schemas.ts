@@ -1,4 +1,8 @@
 import { z } from "@paperclipai/plugin-sdk";
+import {
+  PLUGIN_LAUNCHER_BOUNDS,
+  PLUGIN_LAUNCHER_RENDER_ENVIRONMENTS,
+} from "@paperclipai/shared";
 
 export const opencodeProjectSourceOfTruthSchema = z.enum([
   "repo_first",
@@ -253,6 +257,23 @@ export const opencodeProjectAppliedAgentResultSchema = z.object({
   paperclipAgentId: z.string().uuid(),
 }).strict();
 
+const pluginLauncherRenderContextSnapshotSchema = z.object({
+  environment: z.enum(PLUGIN_LAUNCHER_RENDER_ENVIRONMENTS).nullable(),
+  launcherId: z.string().min(1).nullable(),
+  bounds: z.enum(PLUGIN_LAUNCHER_BOUNDS).nullable(),
+}).strict();
+
+const opencodeProjectFinalizeAgentUpsertSchema = z.union([
+  z.object({
+    operation: z.enum(["create", "update"]),
+    paperclipAgentId: z.string().uuid().nullable(),
+    externalAgentKey: z.string().min(1),
+    repoRelPath: z.string().min(1),
+    fingerprint: z.string().min(1),
+  }).strict(),
+  opencodeProjectPlannedAgentUpsertSchema,
+]);
+
 export const opencodeProjectFinalizeSyncInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -261,14 +282,9 @@ export const opencodeProjectFinalizeSyncInputSchema = z.object({
   lastScanFingerprint: z.string().min(1),
   selectedAgentKeys: z.array(z.string().min(1)),
   warnings: z.array(z.string()),
-  agentUpserts: z.array(z.object({
-    operation: z.enum(["create", "update"]),
-    paperclipAgentId: z.string().uuid().nullable(),
-    externalAgentKey: z.string().min(1),
-    repoRelPath: z.string().min(1),
-    fingerprint: z.string().min(1),
-  }).strict()),
+  agentUpserts: z.array(opencodeProjectFinalizeAgentUpsertSchema),
   appliedAgents: z.array(opencodeProjectAppliedAgentResultSchema),
+  renderEnvironment: pluginLauncherRenderContextSnapshotSchema.nullish(),
 }).strict();
 
 export const opencodeProjectSyncManifestAgentSchema = z.object({

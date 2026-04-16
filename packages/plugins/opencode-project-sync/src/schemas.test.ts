@@ -3,6 +3,7 @@ import {
   importedOpencodeAgentMetadataSchema,
   opencodeProjectConflictSchema,
   opencodeProjectFinalizeSyncInputSchema,
+  opencodeProjectPlannedAgentUpsertSchema,
   opencodeProjectSyncNowInputSchema,
   opencodeTopLevelAgentPreviewSchema,
   opencodeProjectTestRuntimeInputSchema,
@@ -173,6 +174,93 @@ describe("opencode project package schemas", () => {
         paperclipAgentId: "33333333-3333-4333-8333-333333333333",
       }],
     }).success).toBe(true);
+  });
+
+  it("accepts planned upserts plus injected renderEnvironment during finalize", () => {
+    const plannedUpsert = opencodeProjectPlannedAgentUpsertSchema.parse({
+      operation: "create",
+      paperclipAgentId: null,
+      externalAgentKey: "researcher",
+      repoRelPath: ".opencode/agents/researcher.md",
+      fingerprint: "fp",
+      matchBasis: "new_agent",
+      payload: {
+        name: "Researcher",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_full",
+        adapterConfig: {
+          executionMode: "local_cli",
+          model: "openai/gpt-5.4",
+          promptTemplate: "# Researcher",
+          localCli: {
+            allowProjectConfig: true,
+          },
+        },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId: "22222222-2222-4222-8222-222222222222",
+          workspaceId: "33333333-3333-4333-8333-333333333333",
+          repoRoot: "/repos/canonical",
+          repoRelPath: ".opencode/agents/researcher.md",
+          canonicalLocator: "/repos/canonical::.opencode/agents/researcher.md",
+          externalAgentKey: "researcher",
+          externalAgentName: "Researcher",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp",
+          lastImportedAt: "2026-04-11T12:00:00.000Z",
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      },
+    });
+
+    expect(opencodeProjectFinalizeSyncInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      workspaceId: "33333333-3333-4333-8333-333333333333",
+      importedAt: "2026-04-11T12:00:00.000Z",
+      lastScanFingerprint: "abc123",
+      selectedAgentKeys: ["researcher"],
+      warnings: [],
+      agentUpserts: [plannedUpsert],
+      appliedAgents: [{
+        externalAgentKey: "researcher",
+        paperclipAgentId: "44444444-4444-4444-8444-444444444444",
+      }],
+      renderEnvironment: {
+        environment: "hostOverlay",
+        launcherId: "opencode-project-sync",
+        bounds: "default",
+      },
+    }).success).toBe(true);
+  });
+
+  it("rejects unexpected top-level finalize keys while allowing renderEnvironment", () => {
+    expect(opencodeProjectFinalizeSyncInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      importedAt: "2026-04-11T12:00:00.000Z",
+      lastScanFingerprint: "abc123",
+      selectedAgentKeys: ["researcher"],
+      warnings: [],
+      agentUpserts: [{
+        operation: "create",
+        paperclipAgentId: null,
+        externalAgentKey: "researcher",
+        repoRelPath: ".opencode/agents/researcher.md",
+        fingerprint: "fp",
+      }],
+      appliedAgents: [{
+        externalAgentKey: "researcher",
+        paperclipAgentId: "33333333-3333-4333-8333-333333333333",
+      }],
+      unexpectedTopLevelField: true,
+    }).success).toBe(false);
   });
 
   it("rejects malformed persisted sync state for manifest v2", () => {

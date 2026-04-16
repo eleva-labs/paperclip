@@ -16,6 +16,7 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { DEFAULT_OPENCODE_FULL_MODEL } from "../../../packages/adapters/opencode-full/src/ui/index";
 import {
   Popover,
   PopoverContent,
@@ -557,6 +558,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
                     } else if (t === "cursor") {
                       nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
+                    } else if (t === "opencode_full") {
+                      nextValues.model = DEFAULT_OPENCODE_FULL_MODEL;
                     } else if (t === "opencode_local" || t === "opencode_project_local") {
                       nextValues.model = "";
                     }

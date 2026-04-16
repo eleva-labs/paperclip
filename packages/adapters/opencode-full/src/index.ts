@@ -10,7 +10,7 @@ import {
 export const type = "opencode_full";
 export const label = "OpenCode (full)";
 
-const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
+export const DEFAULT_OPENCODE_FULL_MODEL = "openai/gpt-5.4";
 
 const models: Array<{ id: string; label: string }> = [
   { id: DEFAULT_OPENCODE_FULL_MODEL, label: DEFAULT_OPENCODE_FULL_MODEL },
