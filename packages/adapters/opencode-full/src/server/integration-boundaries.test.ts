@@ -66,6 +66,7 @@ vi.mock("./remote-client.js", async () => {
 import { getOpencodeFullConfigSchema, opencodeFullPersistedConfigSchema } from "./config-schema.js";
 import { execute } from "./execute.js";
 import { testEnvironment } from "./test.js";
+import { getRemoteSessionResumeDecision } from "./session-codec.js";
 
 const localConfig = {
   executionMode: "local_cli" as const,
@@ -104,7 +105,11 @@ function envCtx(config: unknown): AdapterEnvironmentTestContext {
   return { config } as AdapterEnvironmentTestContext;
 }
 
-function execCtx(config: unknown): AdapterExecutionContext {
+function execCtx(
+  config: unknown,
+  onLog: AdapterExecutionContext["onLog"] = vi.fn(async () => {}),
+  runtimeOverrides: AdapterExecutionContext["runtime"] | null = null,
+): AdapterExecutionContext {
   return {
     runId: "run-1",
     agent: {
@@ -114,10 +119,10 @@ function execCtx(config: unknown): AdapterExecutionContext {
       adapterType: "opencode_full",
       adapterConfig: {},
     },
-    runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+    runtime: runtimeOverrides ?? { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
     config,
     context: {},
-    onLog: vi.fn(async () => {}),
+    onLog,
     onMeta: vi.fn(async () => {}),
     onSpawn: vi.fn(async () => {}),
     authToken: null,
@@ -243,6 +248,106 @@ describe("opencode_full integration boundaries", () => {
         resolvedTargetIdentity: "server_default",
       },
     });
+  });
+
+  it("executes linked-project remote flow with directory hints and falls back fresh on stale session metadata", async () => {
+    const linkedConfig = {
+      ...remoteConfig,
+      remoteServer: {
+        ...remoteConfig.remoteServer,
+        projectTarget: { mode: "linked_project_context" as const },
+        linkRef: {
+          mode: "linked_project_context" as const,
+          canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+          linkedDirectoryHint: "/srv/repos/forgebox",
+          serverScope: "shared" as const,
+          validatedAt: "2026-04-16T00:00:00.000Z",
+        },
+      },
+    };
+    mocked.ensureRemoteServerOpenCodeModelConfiguredAndAvailable.mockResolvedValue([{ id: "openai/gpt-5.4", label: "openai/gpt-5.4" }]);
+    mocked.createRemoteSession.mockResolvedValue({ ok: true, status: 200, text: "", data: { id: "ses-linked" } });
+    mocked.postRemoteSessionMessage.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: "",
+      data: {
+        info: { cost: 0.12, usage: { inputTokens: 4, outputTokens: 9 } },
+        parts: [{ text: "hello from linked remote" }],
+      },
+    });
+    mocked.getRemoteSessionMessages.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: "",
+      data: [{ parts: [{ text: "hello from linked remote" }] }],
+    });
+
+    const onLog = vi.fn(async () => {});
+    const staleRuntime = {
+      sessionId: "ses-old",
+      sessionDisplayId: "ses-old",
+      taskKey: null,
+      sessionParams: {
+        executionMode: "remote_server",
+        sessionId: "ses-old",
+        remoteSessionId: "ses-old",
+        companyId: "company-1",
+        agentId: "agent-1",
+        adapterType: "opencode_full",
+        configFingerprint: "bad-fingerprint",
+        baseUrl: "https://opencode.example.com",
+        projectTargetMode: "linked_project_context",
+        resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/srv/repos/other",
+        canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+        linkedDirectoryHint: "/srv/repos/other",
+      },
+    };
+
+    expect(getRemoteSessionResumeDecision({
+      companyId: "company-1",
+      agentId: "agent-1",
+      config: linkedConfig,
+      sessionParams: staleRuntime.sessionParams,
+    })).toEqual({ shouldResume: false, reason: "config_fingerprint_mismatch" });
+
+    const result = await execute(execCtx(linkedConfig, onLog, staleRuntime));
+
+    expect(mocked.createRemoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteServer: expect.objectContaining({
+          projectTarget: { mode: "linked_project_context" },
+          linkRef: expect.objectContaining({ linkedDirectoryHint: "/srv/repos/forgebox" }),
+        }),
+      }),
+      {},
+    );
+    expect(mocked.postRemoteSessionMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteServer: expect.objectContaining({
+          projectTarget: { mode: "linked_project_context" },
+          linkRef: expect.objectContaining({ linkedDirectoryHint: "/srv/repos/forgebox" }),
+        }),
+      }),
+      "ses-linked",
+      expect.objectContaining({
+        model: { providerID: "openai", modelID: "gpt-5.4" },
+      }),
+    );
+    expect(result).toMatchObject({
+      exitCode: 0,
+      sessionId: "ses-linked",
+      summary: "hello from linked remote",
+      sessionParams: {
+        executionMode: "remote_server",
+        baseUrl: "https://opencode.example.com",
+        projectTargetMode: "linked_project_context",
+        resolvedTargetIdentity: "linked_project_context:11111111-1111-4111-8111-111111111111:/srv/repos/forgebox",
+        canonicalWorkspaceId: "11111111-1111-4111-8111-111111111111",
+        linkedDirectoryHint: "/srv/repos/forgebox",
+      },
+    });
+    expect(onLog).toHaveBeenCalledWith("stdout", expect.stringContaining("Remote session resume refused"));
   });
 
   it("does not claim non-none auth execution support", async () => {
