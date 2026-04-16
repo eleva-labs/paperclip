@@ -1,5 +1,6 @@
 import { z } from "@paperclipai/plugin-sdk";
 import {
+  opencodeRemoteLinkRefSchema,
   opencodeProjectSyncPolicySchema,
   opencodeSelectedAgentSchema,
   opencodeProjectConflictSchema,
@@ -34,6 +35,7 @@ export const opencodeProjectSyncStateSchema = z.object({
   importedAgents: z.array(opencodeProjectSyncManifestAgentSchema),
   warnings: z.array(z.string()),
   conflicts: z.array(opencodeProjectConflictSchema),
+  remoteLink: opencodeRemoteLinkRefSchema.nullable().default(null),
 }).strict();
 
 export type OpencodeProjectSyncState = z.infer<typeof opencodeProjectSyncStateSchema>;

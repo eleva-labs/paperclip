@@ -48,6 +48,7 @@ function makeState(): OpencodeProjectSyncState {
     }],
     warnings: [],
     conflicts: [],
+    remoteLink: null,
   };
 }
 

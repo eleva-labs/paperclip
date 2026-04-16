@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   importedOpencodeAgentMetadataSchema,
+  opencodeProjectClearRemoteLinkResultSchema,
   opencodeProjectConflictSchema,
   opencodeProjectFinalizeSyncInputSchema,
+  opencodeProjectLinkRemoteContextResultSchema,
+  opencodeProjectResolveRemoteModeStatusResultSchema,
+  opencodeProjectSyncCompanySettingsSchema,
   opencodeProjectPlannedAgentUpsertSchema,
   opencodeProjectSyncNowInputSchema,
   opencodeTopLevelAgentPreviewSchema,
@@ -11,6 +15,24 @@ import {
 import { opencodeProjectSyncStateSchema } from "./sync-state.js";
 
 describe("opencode project package schemas", () => {
+  it("keeps plugin company remote base URL ownership explicit", () => {
+    expect(opencodeProjectSyncCompanySettingsSchema.parse({})).toEqual({
+      remoteServerDefault: { mode: "unset" },
+    });
+
+    expect(opencodeProjectSyncCompanySettingsSchema.safeParse({
+      remoteServerDefault: { mode: "fixed", baseUrl: "https://remote.example.com" },
+    }).success).toBe(true);
+
+    expect(opencodeProjectSyncCompanySettingsSchema.safeParse({
+      remoteServerDefault: { mode: "fixed" },
+    }).success).toBe(false);
+
+    expect(opencodeProjectSyncCompanySettingsSchema.safeParse({
+      remoteServerDefault: { mode: "per_agent", baseUrl: "https://remote.example.com" },
+    }).success).toBe(false);
+  });
+
   it("rejects malformed action inputs and supports selectedAgentKeys", () => {
     expect(opencodeProjectSyncNowInputSchema.safeParse({ companyId: "bad", projectId: "still-bad" }).success).toBe(false);
 
@@ -316,5 +338,237 @@ describe("opencode project package schemas", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts linked remote status payloads and keeps sync gating data explicit", () => {
+    const result = opencodeProjectResolveRemoteModeStatusResultSchema.safeParse({
+      canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+      canonicalRepoRoot: "/repos/canonical",
+      companyBaseUrlDefault: "https://remote.example.com",
+      remoteLink: {
+        version: 2,
+        status: "linked",
+        baseUrl: "https://remote.example.com",
+        serverScope: "shared",
+        targetMode: "linked_project_context",
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+        canonicalRepoRoot: "/repos/canonical",
+        linkedDirectoryHint: "/workspace/repo",
+        projectEvidence: {
+          projectId: "remote-project-1",
+          projectName: "Forgebox",
+          pathCwd: "/workspace/repo",
+          repoRoot: "/workspace/repo",
+          repoUrl: "https://github.com/acme/forgebox.git",
+          repoRef: "main",
+        },
+        validatedAt: "2026-04-16T12:00:00.000Z",
+        invalidatedAt: null,
+        invalidReason: null,
+        lastHealthOkAt: "2026-04-16T12:00:00.000Z",
+        lastSyncAt: null,
+        lastRunAt: null,
+        propagatedToImportedAgentsAt: null,
+      },
+      syncAllowed: true,
+      syncBlockReason: null,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts stale and broken remote link payloads in persisted sync state", () => {
+    const staleState = opencodeProjectSyncStateSchema.safeParse({
+      projectId: "11111111-1111-4111-8111-111111111111",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      canonicalRepoRoot: "/repos/canonical",
+      canonicalRepoUrl: null,
+      canonicalRepoRef: null,
+      bootstrapCompletedAt: null,
+      lastScanFingerprint: null,
+      lastImportedAt: null,
+      lastExportedAt: null,
+      manifestVersion: 2,
+      syncPolicy: {
+        mode: "top_level_agents_only",
+        syncSkills: false,
+        importRootAgentsMd: false,
+        importNestedAgents: false,
+      },
+      selectedAgents: [],
+      importedAgents: [],
+      warnings: [],
+      conflicts: [],
+      remoteLink: {
+        version: 2,
+        status: "stale",
+        baseUrl: "https://remote.example.com",
+        serverScope: "unknown",
+        targetMode: "linked_project_context",
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+        canonicalRepoRoot: "/repos/canonical",
+        linkedDirectoryHint: "/workspace/repo",
+        projectEvidence: {
+          projectId: null,
+          projectName: "Forgebox",
+          pathCwd: "/workspace/repo",
+          repoRoot: "/workspace/repo",
+          repoUrl: null,
+          repoRef: null,
+        },
+        validatedAt: "2026-04-16T12:00:00.000Z",
+        invalidatedAt: "2026-04-16T13:00:00.000Z",
+        invalidReason: "Project evidence no longer matches the canonical repo intent.",
+        lastHealthOkAt: "2026-04-16T12:30:00.000Z",
+        lastSyncAt: null,
+        lastRunAt: null,
+        propagatedToImportedAgentsAt: "2026-04-16T12:05:00.000Z",
+      },
+    });
+
+    const brokenState = opencodeProjectSyncStateSchema.safeParse({
+      projectId: "11111111-1111-4111-8111-111111111111",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      canonicalRepoRoot: "/repos/canonical",
+      canonicalRepoUrl: null,
+      canonicalRepoRef: null,
+      bootstrapCompletedAt: null,
+      lastScanFingerprint: null,
+      lastImportedAt: null,
+      lastExportedAt: null,
+      manifestVersion: 2,
+      syncPolicy: {
+        mode: "top_level_agents_only",
+        syncSkills: false,
+        importRootAgentsMd: false,
+        importNestedAgents: false,
+      },
+      selectedAgents: [],
+      importedAgents: [],
+      warnings: [],
+      conflicts: [],
+      remoteLink: {
+        version: 2,
+        status: "broken",
+        baseUrl: "https://remote.example.com",
+        serverScope: "shared",
+        targetMode: "linked_project_context",
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+        canonicalRepoRoot: "/repos/canonical",
+        linkedDirectoryHint: "/workspace/repo",
+        projectEvidence: {
+          projectId: "remote-project-1",
+          projectName: null,
+          pathCwd: null,
+          repoRoot: "/workspace/repo",
+          repoUrl: null,
+          repoRef: null,
+        },
+        validatedAt: "2026-04-16T12:00:00.000Z",
+        invalidatedAt: "2026-04-16T13:00:00.000Z",
+        invalidReason: "Remote validation probe failed.",
+        lastHealthOkAt: null,
+        lastSyncAt: null,
+        lastRunAt: null,
+        propagatedToImportedAgentsAt: null,
+      },
+    });
+
+    expect(staleState.success).toBe(true);
+    expect(brokenState.success).toBe(true);
+  });
+
+  it("stays backward-aware by defaulting missing remoteLink to null", () => {
+    const parsed = opencodeProjectSyncStateSchema.parse({
+      projectId: "11111111-1111-4111-8111-111111111111",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
+      canonicalRepoRoot: "/repos/canonical",
+      canonicalRepoUrl: null,
+      canonicalRepoRef: null,
+      bootstrapCompletedAt: null,
+      lastScanFingerprint: null,
+      lastImportedAt: null,
+      lastExportedAt: null,
+      manifestVersion: 2,
+      syncPolicy: {
+        mode: "top_level_agents_only",
+        syncSkills: false,
+        importRootAgentsMd: false,
+        importNestedAgents: false,
+      },
+      selectedAgents: [],
+      importedAgents: [],
+      warnings: [],
+      conflicts: [],
+    });
+
+    expect(parsed.remoteLink).toBeNull();
+  });
+
+  it("rejects malformed or out-of-scope remote link payloads", () => {
+    expect(opencodeProjectLinkRemoteContextResultSchema.safeParse({
+      remoteLink: {
+        version: 2,
+        status: "linked",
+        baseUrl: "not-a-url",
+        serverScope: "shared",
+        targetMode: "linked_project_context",
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+        canonicalRepoRoot: "/repos/canonical",
+        linkedDirectoryHint: "/workspace/repo",
+        projectEvidence: {
+          projectId: "remote-project-1",
+          projectName: "Forgebox",
+          pathCwd: "/workspace/repo",
+          repoRoot: "/workspace/repo",
+          repoUrl: null,
+          repoRef: null,
+        },
+        validatedAt: "2026-04-16T12:00:00.000Z",
+        invalidatedAt: null,
+        invalidReason: null,
+        lastHealthOkAt: null,
+        lastSyncAt: null,
+        lastRunAt: null,
+        propagatedToImportedAgentsAt: null,
+      },
+      warnings: [],
+      updatedImportedAgentCount: 1,
+    }).success).toBe(false);
+
+    expect(opencodeProjectLinkRemoteContextResultSchema.safeParse({
+      remoteLink: {
+        version: 2,
+        status: "linked",
+        baseUrl: "https://remote.example.com",
+        serverScope: "shared",
+        targetMode: "workspace_runtime",
+        canonicalWorkspaceId: "22222222-2222-4222-8222-222222222222",
+        canonicalRepoRoot: "/repos/canonical",
+        linkedDirectoryHint: "/workspace/repo",
+        projectEvidence: {
+          projectId: "remote-project-1",
+          projectName: "Forgebox",
+          pathCwd: "/workspace/repo",
+          repoRoot: "/workspace/repo",
+          repoUrl: null,
+          repoRef: null,
+        },
+        validatedAt: "2026-04-16T12:00:00.000Z",
+        invalidatedAt: null,
+        invalidReason: null,
+        lastHealthOkAt: null,
+        lastSyncAt: null,
+        lastRunAt: null,
+        propagatedToImportedAgentsAt: null,
+      },
+      warnings: [],
+      updatedImportedAgentCount: 1,
+    }).success).toBe(false);
+
+    expect(opencodeProjectClearRemoteLinkResultSchema.safeParse({
+      cleared: false,
+      updatedImportedAgentCount: 0,
+    }).success).toBe(false);
   });
 });

@@ -6,11 +6,16 @@ export const OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID = "opencode-project-tab";
 export const OPENCODE_PROJECT_SYNC_STATE_DATA_KEY = "project-sync-state";
 export const OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY = "project-sync-preview";
 export const OPENCODE_PROJECT_SYNC_HOST_CONTRACT_DATA_KEY = "host-mutation-contract";
+export const OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY = "project-remote-mode-status";
 export const OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY = "bootstrap-project";
 export const OPENCODE_PROJECT_SYNC_ACTION_KEY = "sync-now";
 export const OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY = "finalize-sync-now";
 export const OPENCODE_PROJECT_EXPORT_ACTION_KEY = "export-to-repo";
 export const OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY = "test-runtime";
+export const OPENCODE_PROJECT_RESOLVE_REMOTE_MODE_STATUS_ACTION_KEY = "resolve-remote-mode-status";
+export const OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY = "link-remote-project-context";
+export const OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY = "refresh-remote-link";
+export const OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY = "clear-remote-link";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: OPENCODE_PROJECT_SYNC_PLUGIN_ID,

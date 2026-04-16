@@ -9,6 +9,15 @@ export const opencodeProjectSourceOfTruthSchema = z.enum([
   "paperclip_export_guarded",
 ]);
 
+export const opencodeRemoteBaseUrlSourceSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("unset") }).strict(),
+  z.object({ mode: z.literal("fixed"), baseUrl: z.string().trim().url() }).strict(),
+]);
+
+export const opencodeProjectSyncCompanySettingsSchema = z.object({
+  remoteServerDefault: opencodeRemoteBaseUrlSourceSchema.default({ mode: "unset" }),
+}).strict();
+
 export const opencodeProjectSyncPolicySchema = z.object({
   mode: z.literal("top_level_agents_only"),
   syncSkills: z.literal(false),
@@ -107,6 +116,93 @@ export const opencodeProjectConflictSchema = z.object({
   repoRelPath: z.string().min(1).nullable(),
   entityType: z.enum(["agent", "workspace"]).nullable(),
   entityKey: z.string().min(1).nullable(),
+}).strict();
+
+export const opencodeRemoteServerScopeSchema = z.enum([
+  "shared",
+  "dedicated_single_company",
+  "unknown",
+]);
+
+export const opencodeRemoteLinkStatusSchema = z.enum([
+  "not_linked",
+  "linked",
+  "stale",
+  "broken",
+]);
+
+export const opencodeRemoteProjectEvidenceSchema = z.object({
+  projectId: z.string().min(1).nullable(),
+  projectName: z.string().min(1).nullable(),
+  pathCwd: z.string().min(1).nullable(),
+  repoRoot: z.string().min(1).nullable(),
+  repoUrl: z.string().min(1).nullable(),
+  repoRef: z.string().min(1).nullable(),
+}).strict();
+
+export const opencodeRemoteLinkRefSchema = z.object({
+  version: z.literal(2),
+  status: opencodeRemoteLinkStatusSchema,
+  baseUrl: z.string().trim().url(),
+  serverScope: opencodeRemoteServerScopeSchema,
+  targetMode: z.literal("linked_project_context"),
+  canonicalWorkspaceId: z.string().uuid(),
+  canonicalRepoRoot: z.string().min(1),
+  linkedDirectoryHint: z.string().min(1),
+  projectEvidence: opencodeRemoteProjectEvidenceSchema,
+  validatedAt: z.string().datetime(),
+  invalidatedAt: z.string().datetime().nullable(),
+  invalidReason: z.string().min(1).nullable(),
+  lastHealthOkAt: z.string().datetime().nullable(),
+  lastSyncAt: z.string().datetime().nullable(),
+  lastRunAt: z.string().datetime().nullable(),
+  propagatedToImportedAgentsAt: z.string().datetime().nullable(),
+}).strict();
+
+export const opencodeProjectResolveRemoteModeStatusInputSchema = z.object({
+  companyId: z.string().uuid(),
+  projectId: z.string().uuid(),
+}).strict();
+
+export const opencodeProjectResolveRemoteModeStatusResultSchema = z.object({
+  canonicalWorkspaceId: z.string().uuid(),
+  canonicalRepoRoot: z.string().min(1),
+  companyBaseUrlDefault: z.string().trim().url().nullable(),
+  remoteLink: opencodeRemoteLinkRefSchema.nullable(),
+  syncAllowed: z.boolean(),
+  syncBlockReason: z.string().min(1).nullable(),
+}).strict();
+
+export const opencodeProjectLinkRemoteContextInputSchema = z.object({
+  companyId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  baseUrl: z.string().trim().url().optional(),
+}).strict();
+
+export const opencodeProjectLinkRemoteContextResultSchema = z.object({
+  remoteLink: opencodeRemoteLinkRefSchema,
+  warnings: z.array(z.string()),
+  updatedImportedAgentCount: z.number().int().nonnegative(),
+}).strict();
+
+export const opencodeProjectRefreshRemoteLinkInputSchema = z.object({
+  companyId: z.string().uuid(),
+  projectId: z.string().uuid(),
+}).strict();
+
+export const opencodeProjectRefreshRemoteLinkResultSchema = z.object({
+  remoteLink: opencodeRemoteLinkRefSchema,
+  updatedImportedAgentCount: z.number().int().nonnegative(),
+}).strict();
+
+export const opencodeProjectClearRemoteLinkInputSchema = z.object({
+  companyId: z.string().uuid(),
+  projectId: z.string().uuid(),
+}).strict();
+
+export const opencodeProjectClearRemoteLinkResultSchema = z.object({
+  cleared: z.literal(true),
+  updatedImportedAgentCount: z.number().int().nonnegative(),
 }).strict();
 
 export const opencodeImportedAgentRemoteAuthSchema = z.discriminatedUnion("mode", [
@@ -319,7 +415,21 @@ export type OpencodeIgnoredArtifact = z.infer<typeof opencodeIgnoredArtifactSche
 export type OpencodeTopLevelAgentPreview = z.infer<typeof opencodeTopLevelAgentPreviewSchema>;
 export type OpencodeSelectedAgent = z.infer<typeof opencodeSelectedAgentSchema>;
 export type OpencodeLegacyOutOfScopeEntity = z.infer<typeof opencodeLegacyOutOfScopeEntitySchema>;
+export type OpencodeProjectSyncCompanySettings = z.infer<typeof opencodeProjectSyncCompanySettingsSchema>;
+export type OpencodeRemoteBaseUrlSource = z.infer<typeof opencodeRemoteBaseUrlSourceSchema>;
+export type OpencodeRemoteLinkRef = z.infer<typeof opencodeRemoteLinkRefSchema>;
+export type OpencodeRemoteLinkStatus = z.infer<typeof opencodeRemoteLinkStatusSchema>;
+export type OpencodeRemoteProjectEvidence = z.infer<typeof opencodeRemoteProjectEvidenceSchema>;
+export type OpencodeRemoteServerScope = z.infer<typeof opencodeRemoteServerScopeSchema>;
 export type OpencodeProjectResolveWorkspaceInput = z.infer<typeof opencodeProjectResolveWorkspaceInputSchema>;
+export type OpencodeProjectResolveRemoteModeStatusInput = z.infer<typeof opencodeProjectResolveRemoteModeStatusInputSchema>;
+export type OpencodeProjectResolveRemoteModeStatusResult = z.infer<typeof opencodeProjectResolveRemoteModeStatusResultSchema>;
+export type OpencodeProjectLinkRemoteContextInput = z.infer<typeof opencodeProjectLinkRemoteContextInputSchema>;
+export type OpencodeProjectLinkRemoteContextResult = z.infer<typeof opencodeProjectLinkRemoteContextResultSchema>;
+export type OpencodeProjectRefreshRemoteLinkInput = z.infer<typeof opencodeProjectRefreshRemoteLinkInputSchema>;
+export type OpencodeProjectRefreshRemoteLinkResult = z.infer<typeof opencodeProjectRefreshRemoteLinkResultSchema>;
+export type OpencodeProjectClearRemoteLinkInput = z.infer<typeof opencodeProjectClearRemoteLinkInputSchema>;
+export type OpencodeProjectClearRemoteLinkResult = z.infer<typeof opencodeProjectClearRemoteLinkResultSchema>;
 export type OpencodeProjectSyncNowInput = z.infer<typeof opencodeProjectSyncNowInputSchema>;
 export type OpencodeProjectExportInput = z.infer<typeof opencodeProjectExportInputSchema>;
 export type OpencodeProjectTestRuntimeInput = z.infer<typeof opencodeProjectTestRuntimeInputSchema>;

@@ -203,6 +203,7 @@ async function readOrCreateSyncState(
     importedAgents: [],
     warnings: [],
     conflicts: [],
+    remoteLink: null,
   };
 }
 

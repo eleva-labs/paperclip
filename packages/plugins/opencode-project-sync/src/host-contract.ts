@@ -5,6 +5,13 @@ import {
   OPENCODE_PROJECT_HOST_MUTATION_SURFACE,
   OPENCODE_PROJECT_HOST_MUTATION_TRANSPORT,
 } from "./host-contract-constants.js";
+import {
+  OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY,
+  OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY,
+  OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY,
+  OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY,
+  OPENCODE_PROJECT_RESOLVE_REMOTE_MODE_STATUS_ACTION_KEY,
+} from "./manifest.js";
 
 export {
   OPENCODE_PROJECT_HOST_API_BASE_PATH,
@@ -58,4 +65,47 @@ export const opencodeProjectHostMutationContract = {
   ],
 } as const satisfies z.infer<typeof opencodeProjectHostMutationContractSchema>;
 
+export const opencodeProjectRemoteLinkContractSchema = z.object({
+  authority: z.object({
+    canonicalStateOwner: z.literal("plugin_project_workspace_state"),
+    derivedRuntimeOwner: z.literal("imported_agent_adapter_config"),
+    companyBaseUrlOwner: z.literal("plugin_company_settings"),
+    adapterOwnsCanonicalState: z.literal(false),
+  }).strict(),
+  statusData: z.object({
+    projectRemoteStatus: z.literal(OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY),
+  }).strict(),
+  actions: z.object({
+    resolveRemoteModeStatus: z.literal(OPENCODE_PROJECT_RESOLVE_REMOTE_MODE_STATUS_ACTION_KEY),
+    linkRemoteProjectContext: z.literal(OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY),
+    refreshRemoteLink: z.literal(OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY),
+    clearRemoteLink: z.literal(OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY),
+  }).strict(),
+  notes: z.array(z.string().min(1)).min(1),
+}).strict();
+
+export const opencodeProjectRemoteLinkContract = {
+  authority: {
+    canonicalStateOwner: "plugin_project_workspace_state",
+    derivedRuntimeOwner: "imported_agent_adapter_config",
+    companyBaseUrlOwner: "plugin_company_settings",
+    adapterOwnsCanonicalState: false,
+  },
+  statusData: {
+    projectRemoteStatus: OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY,
+  },
+  actions: {
+    resolveRemoteModeStatus: OPENCODE_PROJECT_RESOLVE_REMOTE_MODE_STATUS_ACTION_KEY,
+    linkRemoteProjectContext: OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY,
+    refreshRemoteLink: OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY,
+    clearRemoteLink: OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY,
+  },
+  notes: [
+    "The canonical remote link record lives in project_workspace-scoped plugin state and remains the only authority for project-level remote status.",
+    "Imported opencode_full adapter config may carry a derived runtime copy, but that copy is not authoritative for link lifecycle or base URL ownership.",
+    "MVP success paths assume auth.mode=none and project/path/session APIs only; no workspace provisioning/runtime is implied by this contract.",
+  ],
+} as const satisfies z.infer<typeof opencodeProjectRemoteLinkContractSchema>;
+
 export type OpencodeProjectHostMutationContract = z.infer<typeof opencodeProjectHostMutationContractSchema>;
+export type OpencodeProjectRemoteLinkContract = z.infer<typeof opencodeProjectRemoteLinkContractSchema>;

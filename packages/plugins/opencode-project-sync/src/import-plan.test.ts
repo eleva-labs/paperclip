@@ -31,6 +31,7 @@ function makeState(): OpencodeProjectSyncState {
     importedAgents: [],
     warnings: [],
     conflicts: [],
+    remoteLink: null,
   };
 }
 
