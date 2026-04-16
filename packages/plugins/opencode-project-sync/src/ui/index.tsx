@@ -9,8 +9,12 @@ import {
   type PluginBridgeError,
 } from "@paperclipai/plugin-sdk/ui";
 import {
+  OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY,
   OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
   OPENCODE_PROJECT_EXPORT_ACTION_KEY,
+  OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY,
+  OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY,
+  OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_DETAIL_TAB_ID,
@@ -64,6 +68,13 @@ type SyncState = {
   conflicts: Conflict[];
   importedAgents: SyncManifestAgent[];
   importedSkills: SyncManifestSkill[];
+  remoteLink?: {
+    status: "not_linked" | "linked" | "stale" | "broken";
+    baseUrl: string;
+    linkedDirectoryHint: string;
+    invalidReason: string | null;
+    propagatedToImportedAgentsAt: string | null;
+  } | null;
 };
 
 type WorkspaceBinding = {
@@ -91,7 +102,7 @@ type PreviewData = {
       role: string | null;
       advisoryMode: "primary" | "subagent" | null;
       selectionDefault: boolean;
-      frontmatter: {
+      frontmatter?: {
         model: string | null;
       };
     }>;
@@ -105,6 +116,15 @@ type PreviewData = {
       repoRelPath: string;
     }>;
   };
+};
+
+type RemoteModeStatusData = {
+  canonicalWorkspaceId: string;
+  canonicalRepoRoot: string;
+  companyBaseUrlDefault: string | null;
+  remoteLink: SyncState["remoteLink"];
+  syncAllowed: boolean;
+  syncBlockReason: string | null;
 };
 
 type RuntimeTestResult = {
@@ -404,6 +424,9 @@ function ProjectOpenCodePanel({ compact = false }: { compact?: boolean }): React
   const finalizeSyncProject = usePluginAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY);
   const exportProject = usePluginAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY);
   const testRuntime = usePluginAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY);
+  const linkRemoteProjectContext = usePluginAction(OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY);
+  const refreshRemoteLink = usePluginAction(OPENCODE_PROJECT_REFRESH_REMOTE_LINK_ACTION_KEY);
+  const clearRemoteLink = usePluginAction(OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY);
 
   if (!context.companyId || !context.projectId) {
     return (
@@ -427,6 +450,9 @@ function ProjectOpenCodePanel({ compact = false }: { compact?: boolean }): React
       finalizeSyncProject={finalizeSyncProject}
       exportProject={exportProject}
       testRuntime={testRuntime}
+      linkRemoteProjectContext={linkRemoteProjectContext}
+      refreshRemoteLink={refreshRemoteLink}
+      clearRemoteLink={clearRemoteLink}
     />
   );
 }
@@ -442,6 +468,9 @@ function ProjectOpenCodePanelLoaded({
   finalizeSyncProject,
   exportProject,
   testRuntime,
+  linkRemoteProjectContext,
+  refreshRemoteLink,
+  clearRemoteLink,
 }: {
   companyId: string;
   projectId: string;
@@ -453,9 +482,13 @@ function ProjectOpenCodePanelLoaded({
   finalizeSyncProject: (params?: Record<string, unknown>) => Promise<unknown>;
   exportProject: (params?: Record<string, unknown>) => Promise<unknown>;
   testRuntime: (params?: Record<string, unknown>) => Promise<unknown>;
+  linkRemoteProjectContext: (params?: Record<string, unknown>) => Promise<unknown>;
+  refreshRemoteLink: (params?: Record<string, unknown>) => Promise<unknown>;
+  clearRemoteLink: (params?: Record<string, unknown>) => Promise<unknown>;
 }): ReactElement {
   const stateQuery = usePluginData<StateData>(OPENCODE_PROJECT_SYNC_STATE_DATA_KEY, { companyId, projectId });
   const previewQuery = usePluginData<PreviewData>(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, { companyId, projectId });
+  const remoteStatusQuery = usePluginData<RemoteModeStatusData>(OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY, { companyId, projectId });
 
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [runtimeMode, setRuntimeMode] = useState<"canonical" | "resolved_execution_workspace">("canonical");
@@ -467,6 +500,7 @@ function ProjectOpenCodePanelLoaded({
   const state = stateQuery.data?.state ?? null;
   const workspace = stateQuery.data?.workspace ?? null;
   const preview = previewQuery.data?.preview ?? null;
+  const remoteStatus = remoteStatusQuery.data ?? null;
 
   useEffect(() => {
     if (!state?.importedAgents?.length) {
@@ -550,6 +584,14 @@ function ProjectOpenCodePanelLoaded({
     return { label: "Not tested", tone: "info" as const };
   }, [displayedRuntimeResult, state?.lastRuntimeTestAt]);
 
+  const remoteSummary = useMemo(() => {
+    if (!remoteStatus) return { label: "Remote status loading", tone: "info" as const };
+    if (!remoteStatus.remoteLink) return { label: "Not linked", tone: "info" as const };
+    if (remoteStatus.remoteLink.status === "linked") return { label: "Remote linked", tone: "ok" as const };
+    if (remoteStatus.remoteLink.status === "stale") return { label: "Remote stale", tone: "warning" as const };
+    return { label: "Remote broken", tone: "error" as const };
+  }, [remoteStatus]);
+
   const canRunRuntimeTest = Boolean(selectedAgentId) && runningAction === null;
   const canSyncSelection = Boolean(state) && runningAction === null && selectedEligibleCount > 0 && !hasSelectionIdentityCollision;
 
@@ -599,7 +641,7 @@ function ProjectOpenCodePanelLoaded({
   }
 
   async function runAction(
-    key: "bootstrap" | "sync" | "export" | "test",
+    key: "bootstrap" | "sync" | "export" | "test" | "link" | "refresh-link" | "clear-link",
     run: () => Promise<unknown>,
     onSuccess: (result: unknown) => void,
   ) {
@@ -610,6 +652,7 @@ function ProjectOpenCodePanelLoaded({
       onSuccess(result);
       stateQuery.refresh();
       previewQuery.refresh();
+      remoteStatusQuery.refresh();
     } catch (error) {
       const message = formatError(error);
       setLastAction({ kind: "error", title: "Action failed", body: message });
@@ -617,6 +660,44 @@ function ProjectOpenCodePanelLoaded({
     } finally {
       setRunningAction(null);
     }
+  }
+
+  function handleLinkRemote(): void {
+    void runAction("link", () => linkRemoteProjectContext({ companyId, projectId }), (result) => {
+      const summary = result as { updatedImportedAgentCount: number; remoteLink: { linkedDirectoryHint: string } };
+      setLastAction({
+        kind: "success",
+        title: "Remote project linked",
+        body: `Linked the project-level remote context and propagated ${summary.updatedImportedAgentCount} imported agent update(s) using directory hint ${summary.remoteLink.linkedDirectoryHint}.`,
+      });
+      toast({ title: "Remote project linked", tone: "success" });
+    });
+  }
+
+  function handleRefreshRemote(): void {
+    void runAction("refresh-link", () => refreshRemoteLink({ companyId, projectId }), (result) => {
+      const summary = result as { updatedImportedAgentCount: number; remoteLink: { status: string } };
+      setLastAction({
+        kind: summary.remoteLink.status === "linked" ? "success" : "warning",
+        title: "Remote link refreshed",
+        body: summary.remoteLink.status === "linked"
+          ? `Remote link is still valid. Propagated ${summary.updatedImportedAgentCount} imported agent update(s).`
+          : `Remote link is now ${summary.remoteLink.status}. Review status before syncing or running remotely.`,
+      });
+      toast({ title: "Remote link refreshed", tone: summary.remoteLink.status === "linked" ? "success" : "warn" });
+    });
+  }
+
+  function handleClearRemote(): void {
+    void runAction("clear-link", () => clearRemoteLink({ companyId, projectId }), (result) => {
+      const summary = result as { updatedImportedAgentCount: number };
+      setLastAction({
+        kind: "success",
+        title: "Remote link cleared",
+        body: `Cleared canonical remote link state and reset ${summary.updatedImportedAgentCount} managed imported agent(s) to server_default remote targeting.`,
+      });
+      toast({ title: "Remote link cleared", tone: "success" });
+    });
   }
 
   if (compact) {
@@ -696,10 +777,11 @@ function ProjectOpenCodePanelLoaded({
         <div style={rowStyle}>
           <SummaryPill label={bootstrapSummary.label} status={bootstrapSummary.tone} />
           <SummaryPill label={syncSummary.label} status={syncSummary.tone} />
+          <SummaryPill label={remoteSummary.label} status={remoteSummary.tone} />
           <SummaryPill label={state?.sourceOfTruth === "paperclip_export_guarded" ? "Guarded export enabled" : "Repo-first source of truth"} status="info" />
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.55, opacity: 0.82 }}>
-          The canonical project workspace is the only phase-1 import/export anchor. Runtime may execute elsewhere, but the UI does not imply automatic bidirectional reconciliation.
+          The canonical Paperclip project workspace remains the import/export anchor. Remote mode links an existing OpenCode project context through stable project/path/session APIs only; no workspace provisioning/runtime is implied.
         </div>
         <div style={rowStyle}>
           <button
@@ -751,8 +833,40 @@ function ProjectOpenCodePanelLoaded({
           >
             {runningAction === "export" ? "Exporting…" : "Guarded export"}
           </button>
+          <button type="button" style={buttonStyle()} disabled={runningAction !== null} onClick={handleLinkRemote}>
+            {runningAction === "link" ? "Linking…" : remoteStatus?.remoteLink ? "Relink remote" : "Link remote"}
+          </button>
+          <button type="button" style={buttonStyle()} disabled={runningAction !== null || !remoteStatus?.remoteLink} onClick={handleRefreshRemote}>
+            {runningAction === "refresh-link" ? "Refreshing…" : "Refresh remote"}
+          </button>
+          <button type="button" style={buttonStyle("warn")} disabled={runningAction !== null || !remoteStatus?.remoteLink} onClick={handleClearRemote}>
+            {runningAction === "clear-link" ? "Clearing…" : "Clear remote"}
+          </button>
         </div>
       </Section>
+
+      {remoteStatus ? (
+        <Section title="Remote project context">
+          <div style={gridStyle}>
+            <KeyValue label="Company default base URL" value={remoteStatus.companyBaseUrlDefault ?? "Unset"} />
+            <KeyValue label="Canonical workspace id" value={remoteStatus.canonicalWorkspaceId} />
+            <KeyValue label="Canonical repo root" value={remoteStatus.canonicalRepoRoot} />
+            <KeyValue label="Remote sync gate" value={remoteStatus.syncAllowed ? "Sync allowed" : remoteStatus.syncBlockReason ?? "Blocked"} />
+            <KeyValue label="Link status" value={remoteStatus.remoteLink?.status ?? "not_linked"} />
+            <KeyValue label="Linked directory hint" value={remoteStatus.remoteLink?.linkedDirectoryHint ?? "Not linked"} />
+          </div>
+          {remoteStatus.remoteLink ? (
+            <div style={{ fontSize: 12, lineHeight: 1.55, opacity: 0.82 }}>
+              Remote base URL: {remoteStatus.remoteLink.baseUrl}. Managed imported agents are rewritten automatically before link, refresh-with-change, or clear reports success.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, lineHeight: 1.55, opacity: 0.82 }}>
+              This project is not linked to a remote OpenCode project context yet. Link uses only `/global/health`, `/project/current`, `/path`, `/vcs`, and a validation `POST /session` probe.
+            </div>
+          )}
+          {remoteStatus.syncBlockReason ? <InlineNotice title="Remote sync gating" body={remoteStatus.syncBlockReason} tone="warning" /> : null}
+        </Section>
+      ) : null}
 
       {stateQuery.loading && !state ? <InlineNotice title="Loading" body="Resolving canonical workspace binding and sync state…" tone="info" /> : null}
       {stateQuery.error ? <InlineNotice title="Bootstrap state" body={stateQuery.error.message} tone="warning" /> : null}
@@ -867,7 +981,7 @@ function ProjectOpenCodePanelLoaded({
                       {(() => {
                         const modelOutcome = getAgentModelOutcome({
                           repoRelPath: agent.repoRelPath,
-                          declaredModel: agent.frontmatter.model,
+                          declaredModel: agent.frontmatter?.model ?? null,
                           warnings: preview.warnings,
                           wasImportedBefore: importedAgentRepoPaths.has(agent.repoRelPath),
                         });
@@ -889,7 +1003,7 @@ function ProjectOpenCodePanelLoaded({
                                 <div style={{ opacity: 0.74 }}>{agent.repoRelPath}</div>
                                 <div style={{ opacity: 0.74 }}>External key: {agent.externalAgentKey}</div>
                                 <div style={{ opacity: 0.74 }}>Role: {agent.role ?? "Not declared"} · Advisory mode: {agent.advisoryMode ?? "unspecified"}</div>
-                                <div style={{ opacity: 0.74 }}>Declared frontmatter.model: {agent.frontmatter.model ?? (modelOutcome.warning ? "Ignored/invalid" : "Not declared")}</div>
+                                <div style={{ opacity: 0.74 }}>Declared frontmatter.model: {agent.frontmatter?.model ?? (modelOutcome.warning ? "Ignored/invalid" : "Not declared")}</div>
                                 <div style={{ opacity: 0.9 }}>{modelOutcome.summary}</div>
                                 <div style={{ opacity: 0.74 }}>{modelOutcome.detail}</div>
                                 {modelOutcome.warning ? <div style={{ color: "#fcd34d" }}>{modelOutcome.warning}</div> : null}

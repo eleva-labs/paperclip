@@ -3,6 +3,7 @@ import type { OpencodeProjectSyncState } from "./sync-state.js";
 import type {
   ImportedOpencodeAgentMetadata,
   OpencodeProjectConflict,
+  OpencodeRemoteLinkRef,
   OpencodeProjectSourceOfTruth,
 } from "./schemas.js";
 import { importedOpencodeAgentMetadataSchema } from "./schemas.js";
@@ -83,6 +84,12 @@ type BuildImportPlanInput = {
   existingState: OpencodeProjectSyncState | null;
   existingAgents: MinimalPaperclipAgent[];
   importedAt: string;
+};
+
+type DerivedRemoteServerConfigOptions = {
+  existingConfig: Record<string, unknown>;
+  baseUrl: string;
+  remoteLink: OpencodeRemoteLinkRef | null;
 };
 
 function toLocator(repoRoot: string, repoRelPath: string): string {
@@ -171,12 +178,80 @@ function withSharedOpencodeFullDefaults(baseConfig: Record<string, unknown>): Re
   };
 }
 
+function buildRemoteServerDefaults(options: DerivedRemoteServerConfigOptions): Record<string, unknown> {
+  const remoteServer = asRecord(options.existingConfig.remoteServer) ?? {};
+  const auth = asRecord(remoteServer.auth) ?? { mode: "none" };
+
+  if (options.remoteLink) {
+    return {
+      ...remoteServer,
+      baseUrl: options.baseUrl,
+      auth,
+      healthTimeoutSec: DEFAULT_OPENCODE_FULL_REMOTE_HEALTH_TIMEOUT_SEC,
+      requireHealthyServer: DEFAULT_OPENCODE_FULL_REMOTE_REQUIRE_HEALTHY_SERVER,
+      projectTarget: { mode: "linked_project_context" },
+      linkRef: options.remoteLink,
+    };
+  }
+
+  return {
+    ...remoteServer,
+    baseUrl: options.baseUrl,
+    auth,
+    healthTimeoutSec: DEFAULT_OPENCODE_FULL_REMOTE_HEALTH_TIMEOUT_SEC,
+    requireHealthyServer: DEFAULT_OPENCODE_FULL_REMOTE_REQUIRE_HEALTHY_SERVER,
+    projectTarget: { mode: "server_default" },
+  };
+}
+
+export function buildManagedImportedAgentAdapterConfigForRemoteLink(input: {
+  existingConfig: Record<string, unknown>;
+  remoteLink: OpencodeRemoteLinkRef;
+}): Record<string, unknown> {
+  return withSharedOpencodeFullDefaults({
+    ...input.existingConfig,
+    executionMode: "remote_server",
+    remoteServer: buildRemoteServerDefaults({
+      existingConfig: input.existingConfig,
+      baseUrl: input.remoteLink.baseUrl,
+      remoteLink: input.remoteLink,
+    }),
+  });
+}
+
+export function buildManagedImportedAgentAdapterConfigForServerDefault(input: {
+  existingConfig: Record<string, unknown>;
+  baseUrl: string;
+}): Record<string, unknown> {
+  return withSharedOpencodeFullDefaults({
+    ...input.existingConfig,
+    executionMode: "remote_server",
+    remoteServer: buildRemoteServerDefaults({
+      existingConfig: input.existingConfig,
+      baseUrl: input.baseUrl,
+      remoteLink: null,
+    }),
+  });
+}
+
 function buildImportedAgentAdapterConfig(input: {
   discoveredAgent: DiscoveredRepoAgent;
   existing: MinimalPaperclipAgent | null;
   resolvedModel: string;
+  remoteLink: OpencodeRemoteLinkRef | null;
 }): Record<string, unknown> {
   const existingConfig = asRecord(input.existing?.adapterConfig) ?? {};
+  if (input.remoteLink) {
+    return buildManagedImportedAgentAdapterConfigForRemoteLink({
+      existingConfig: {
+        ...existingConfig,
+        model: input.resolvedModel,
+        promptTemplate: input.discoveredAgent.instructionsMarkdown,
+      },
+      remoteLink: input.remoteLink,
+    });
+  }
+
   const executionMode = existingConfig.executionMode === "remote_server"
     || existingConfig.executionMode === "local_sdk"
     || existingConfig.executionMode === "local_cli"
@@ -371,6 +446,7 @@ export function buildImportPlan(input: BuildImportPlanInput): ImportPlan {
           discoveredAgent,
           existing,
           resolvedModel,
+          remoteLink: input.existingState?.remoteLink?.status === "linked" ? input.existingState.remoteLink : null,
         }),
         metadata,
       },
