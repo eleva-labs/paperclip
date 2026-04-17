@@ -41,7 +41,7 @@ import type { AdapterPluginRecord } from "../services/adapter-plugin-store.js";
 import type { ServerAdapterModule, AdapterConfigSchema } from "../adapters/types.js";
 import { loadExternalAdapterPackage, getUiParserSource, getOrExtractUiParserSource, reloadExternalAdapter } from "../adapters/plugin-loader.js";
 import { logger } from "../middleware/logger.js";
-import { assertBoard } from "./authz.js";
+import { assertBoardOrgAccess } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
 import { getDefaultTempRoot, stageLocalPackageInstall } from "../services/local-package-staging.js";
 
@@ -60,6 +60,13 @@ interface AdapterInstallRequest {
   version?: string;
 }
 
+interface AdapterCapabilities {
+  supportsInstructionsBundle: boolean;
+  supportsSkills: boolean;
+  supportsLocalAgentJwt: boolean;
+  requiresMaterializedRuntimeSkills: boolean;
+}
+
 interface AdapterInfo {
   type: string;
   label: string;
@@ -67,6 +74,7 @@ interface AdapterInfo {
   modelsCount: number;
   loaded: boolean;
   disabled: boolean;
+  capabilities: AdapterCapabilities;
   /** True when an external plugin has replaced a built-in adapter of the same type. */
   overriddenBuiltin?: boolean;
   /** True when the external override for a builtin type is currently paused. */
@@ -104,6 +112,15 @@ function readAdapterPackageVersionFromDisk(record: AdapterPluginRecord): string 
   }
 }
 
+function buildAdapterCapabilities(adapter: ServerAdapterModule): AdapterCapabilities {
+  return {
+    supportsInstructionsBundle: adapter.supportsInstructionsBundle ?? false,
+    supportsSkills: Boolean(adapter.listSkills || adapter.syncSkills),
+    supportsLocalAgentJwt: adapter.supportsLocalAgentJwt ?? false,
+    requiresMaterializedRuntimeSkills: adapter.requiresMaterializedRuntimeSkills ?? false,
+  };
+}
+
 function buildAdapterInfo(adapter: ServerAdapterModule, externalRecord: AdapterPluginRecord | undefined, disabledSet: Set<string>): AdapterInfo {
   const fromDisk = externalRecord ? readAdapterPackageVersionFromDisk(externalRecord) : undefined;
   return {
@@ -113,6 +130,7 @@ function buildAdapterInfo(adapter: ServerAdapterModule, externalRecord: AdapterP
     modelsCount: (adapter.models ?? []).length,
     loaded: true, // If it's in the registry, it's loaded
     disabled: disabledSet.has(adapter.type),
+    capabilities: buildAdapterCapabilities(adapter),
     overriddenBuiltin: externalRecord ? BUILTIN_ADAPTER_TYPES.has(adapter.type) : undefined,
     overridePaused: BUILTIN_ADAPTER_TYPES.has(adapter.type) ? isOverridePaused(adapter.type) : undefined,
     // Prefer on-disk package.json so the UI reflects bumps without relying on store-only fields.
@@ -175,7 +193,7 @@ export function adapterRoutes() {
    * its model count, and load status.
    */
   router.get("/adapters", async (_req, res) => {
-    assertBoard(_req);
+    assertBoardOrgAccess(_req);
 
     const registeredAdapters = listServerAdapters();
     const externalRecords = new Map(
@@ -201,7 +219,7 @@ export function adapterRoutes() {
    * - version?: string — target version for npm packages
    */
   router.post("/adapters/install", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const { packageName, isLocalPath = false, version } = req.body as AdapterInstallRequest;
 
@@ -336,7 +354,7 @@ export function adapterRoutes() {
    * Request body: { "disabled": boolean }
    */
   router.patch("/adapters/:type", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const adapterType = req.params.type;
     const { disabled } = req.body as { disabled?: boolean };
@@ -371,7 +389,7 @@ export function adapterRoutes() {
    * keep the adapter they started with.
    */
   router.patch("/adapters/:type/override", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const adapterType = req.params.type;
     const { paused } = req.body as { paused?: boolean };
@@ -399,7 +417,7 @@ export function adapterRoutes() {
    * Unregister an external adapter. Built-in adapters cannot be removed.
    */
   router.delete("/adapters/:type", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const adapterType = req.params.type;
 
@@ -474,7 +492,7 @@ export function adapterRoutes() {
    * Cannot be used on built-in adapter types.
    */
   router.post("/adapters/:type/reload", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const type = req.params.type;
 
@@ -526,7 +544,7 @@ export function adapterRoutes() {
   // This is a convenience shortcut for remove + install with the same
   // package name, but without the risk of losing the store record.
   router.post("/adapters/:type/reinstall", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
 
     const type = req.params.type;
 
@@ -591,11 +609,15 @@ export function adapterRoutes() {
   // Serve a declarative config schema for an adapter's UI form fields.
   // The adapter's getConfigSchema() resolves all options (static and dynamic)
   // so the UI receives a fully hydrated schema in a single fetch.
-  const configSchemaCache = new Map<string, { schema: AdapterConfigSchema; fetchedAt: number }>();
+  const configSchemaCache = new Map<string, {
+    adapter: ServerAdapterModule;
+    schema: AdapterConfigSchema;
+    fetchedAt: number;
+  }>();
   const CONFIG_SCHEMA_TTL_MS = 30_000;
 
   router.get("/adapters/:type/config-schema", async (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
     const { type } = req.params;
 
     const adapter = findActiveServerAdapter(type);
@@ -609,14 +631,14 @@ export function adapterRoutes() {
     }
 
     const cached = configSchemaCache.get(type);
-    if (cached && Date.now() - cached.fetchedAt < CONFIG_SCHEMA_TTL_MS) {
+    if (cached && cached.adapter === adapter && Date.now() - cached.fetchedAt < CONFIG_SCHEMA_TTL_MS) {
       res.json(cached.schema);
       return;
     }
 
     try {
       const schema = await adapter.getConfigSchema();
-      configSchemaCache.set(type, { schema, fetchedAt: Date.now() });
+      configSchemaCache.set(type, { adapter, schema, fetchedAt: Date.now() });
       res.json(schema);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -633,7 +655,7 @@ export function adapterRoutes() {
   // The adapter package must export a "./ui-parser" entry in package.json
   // pointing to a self-contained ESM module with zero runtime dependencies.
   router.get("/adapters/:type/ui-parser.js", (req, res) => {
-    assertBoard(req);
+    assertBoardOrgAccess(req);
     const { type } = req.params;
     const source = getOrExtractUiParserSource(type);
     if (!source) {
