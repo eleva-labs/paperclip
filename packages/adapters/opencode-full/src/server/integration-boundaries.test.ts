@@ -21,6 +21,7 @@ const mocked = vi.hoisted(() => ({
   getRemoteSessionMessages: vi.fn(),
   getRemoteSessionStatus: vi.fn(),
   postRemoteSessionMessage: vi.fn(),
+  subscribeRemoteGlobalEvents: vi.fn(),
 }));
 
 vi.mock("@paperclipai/adapter-utils/server-utils", async () => {
@@ -60,6 +61,7 @@ vi.mock("./remote-client.js", async () => {
     getRemoteSessionMessages: mocked.getRemoteSessionMessages,
     getRemoteSessionStatus: mocked.getRemoteSessionStatus,
     postRemoteSessionMessage: mocked.postRemoteSessionMessage,
+    subscribeRemoteGlobalEvents: mocked.subscribeRemoteGlobalEvents,
   };
 });
 
@@ -134,6 +136,13 @@ describe("opencode_full integration boundaries", () => {
     Object.values(mocked).forEach((fn) => fn.mockReset());
     mocked.ensurePathInEnv.mockImplementation((env: Record<string, string>) => env);
     mocked.prepareLocalCliRuntimeConfig.mockResolvedValue({ env: {}, cleanup: async () => {} });
+    // Default streaming subscription mock: resolves connected immediately
+    mocked.subscribeRemoteGlobalEvents.mockResolvedValue({
+      connected: Promise.resolve(),
+      done: new Promise<void>(() => {}),
+      close: vi.fn(async () => {}),
+      droppedEvents: () => 0,
+    });
   });
 
   it("keeps schema/UI contract MVP-narrow", () => {

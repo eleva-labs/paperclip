@@ -197,6 +197,12 @@ export type RemoteGlobalEventSubscription = {
    */
   connected: Promise<void>;
   /**
+   * Resolves when the SSE pump exits for any reason (clean server close,
+   * transport error, or explicit close/abort). Downstream code can race
+   * this against the prompt POST to detect mid-run stream disconnects.
+   */
+  done: Promise<void>;
+  /**
    * Explicit close/abort entry point that downstream execution can call to
    * tear the SSE reader down without leaking it. Idempotent.
    */
@@ -515,10 +521,12 @@ export async function subscribeRemoteGlobalEvents(
   // Kick off the pump but do not await it; its lifetime is tied to the
   // subscription, not to the returned Promise. Unhandled errors inside
   // `pump` are already surfaced via `connected` or silently end the stream.
-  void pump();
+  // The `done` promise resolves when the pump exits for any reason.
+  const done = pump();
 
   return {
     connected,
+    done,
     close: closeReader,
     droppedEvents: () => droppedEvents,
   };
