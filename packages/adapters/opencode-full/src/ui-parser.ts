@@ -115,6 +115,20 @@ export function parseOpenCodeFullStdoutLine(line: string, ts: string): Transcrip
     return [{ kind: "stderr", ts, text: errorText(parsed.error ?? parsed.message) || line }];
   }
 
+  // Additive remote streaming JSONL types — surfaced as system-level run-log
+  // entries without requiring new first-class UI state (design §3.4, §10).
+  if (type === "remote_status") {
+    const sessionId = asString(parsed.sessionID);
+    const status = asString(parsed.status, "unknown");
+    return [{ kind: "system", ts, text: `remote session${sessionId ? ` ${sessionId}` : ""}: ${status}` }];
+  }
+
+  if (type === "remote_stream_gap") {
+    const sessionId = asString(parsed.sessionID);
+    const reason = asString(parsed.reason, "unknown");
+    return [{ kind: "system", ts, text: `remote stream gap${sessionId ? ` (${sessionId})` : ""}: ${reason}` }];
+  }
+
   return [{ kind: "stdout", ts, text: line }];
 }
 
