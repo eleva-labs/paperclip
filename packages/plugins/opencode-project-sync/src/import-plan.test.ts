@@ -269,6 +269,105 @@ describe("buildImportPlan", () => {
     ]);
   });
 
+  it("writes adapter-safe linked_project_context linkRef for imported remote agents", () => {
+    const state = makeState();
+    state.remoteLink = {
+      version: 2,
+      status: "linked",
+      baseUrl: "https://remote.example.com",
+      serverScope: "shared",
+      targetMode: "linked_project_context",
+      canonicalWorkspaceId: workspaceId,
+      canonicalRepoRoot: repoRoot,
+      linkedDirectoryHint: "/remote/repo",
+      projectEvidence: {
+        projectId: "remote-project",
+        projectName: "Remote Forgebox",
+        pathCwd: "/remote/repo",
+        repoRoot: "/remote/repo",
+        repoUrl: "https://example.com/acme/repo.git",
+        repoRef: "main",
+      },
+      validatedAt: "2026-04-16T12:00:00.000Z",
+      invalidatedAt: null,
+      invalidReason: null,
+      lastHealthOkAt: "2026-04-16T12:00:00.000Z",
+      lastSyncAt: null,
+      lastRunAt: null,
+      propagatedToImportedAgentsAt: null,
+    };
+
+    const plan = buildImportPlan({
+      companyId,
+      projectId,
+      workspaceId,
+      repoRoot,
+      sourceOfTruth: "repo_first",
+      selectedAgentKeys: ["researcher"],
+      importedAt,
+      existingState: state,
+      existingAgents: [{
+        id: "agent-remote",
+        name: "Researcher",
+        title: null,
+        reportsTo: null,
+        adapterType: "opencode_full",
+        adapterConfig: { model: "openai/gpt-5.4" },
+        metadata: {
+          syncManaged: true,
+          sourceSystem: "opencode_project_repo",
+          syncPolicyMode: "top_level_agents_only",
+          sourceOfTruth: "repo_first",
+          projectId,
+          workspaceId,
+          repoRoot,
+          repoRelPath: ".opencode/agents/researcher.md",
+          canonicalLocator: `${repoRoot}::.opencode/agents/researcher.md`,
+          externalAgentKey: "researcher",
+          externalAgentName: "Researcher",
+          importRole: "facade_entrypoint",
+          topLevelAgent: true,
+          lastImportedFingerprint: "fp-agent-old",
+          lastImportedAt: importedAt,
+          lastExportedFingerprint: null,
+          lastExportedAt: null,
+        },
+      }],
+      discovery: {
+        warnings: [],
+        eligibleAgents: [{
+          externalAgentKey: "researcher",
+          displayName: "Researcher",
+          role: "Lead researcher",
+          repoRelPath: ".opencode/agents/researcher.md",
+          instructionsMarkdown: "# Researcher\n",
+          advisoryMode: null,
+          selectionDefault: false,
+          fingerprint: "fp-agent-new",
+          frontmatter: { model: null },
+        }],
+      },
+    });
+
+    expect(plan.agentUpserts).toHaveLength(1);
+    expect(plan.agentUpserts[0]?.payload.adapterConfig).toEqual(expect.objectContaining({
+      executionMode: "remote_server",
+      remoteServer: expect.objectContaining({
+        baseUrl: "https://remote.example.com",
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: workspaceId,
+          linkedDirectoryHint: "/remote/repo",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T12:00:00.000Z",
+        },
+      }),
+    }));
+    expect((plan.agentUpserts[0]?.payload.adapterConfig as { remoteServer?: { linkRef?: Record<string, unknown> } }).remoteServer?.linkRef).not.toHaveProperty("projectEvidence");
+    expect((plan.agentUpserts[0]?.payload.adapterConfig as { remoteServer?: { linkRef?: Record<string, unknown> } }).remoteServer?.linkRef).not.toHaveProperty("baseUrl");
+  });
+
   it("emits paperclip_entity_drift for manifest-linked provenance mismatch", () => {
     const state = makeState();
     state.importedAgents = [{

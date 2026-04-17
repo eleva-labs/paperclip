@@ -268,6 +268,70 @@ describe("remote linking lifecycle", () => {
     expect(result.remoteLink.linkedDirectoryHint).toBe("/remote/repo");
   });
 
+  it("replaces adapter config during remote-link propagation so stale local fields are removed", async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.endsWith("/global/health")) return new Response(JSON.stringify({ serverScope: "shared" }), { status: 200 });
+      if (url.endsWith("/project/current")) return new Response(JSON.stringify({ id: "remote-project", name: "Remote Forgebox" }), { status: 200 });
+      if (url.endsWith("/path")) return new Response(JSON.stringify({ cwd: "/remote/repo", repoRoot: "/remote/repo" }), { status: 200 });
+      if (url.endsWith("/vcs")) return new Response(JSON.stringify({ repoUrl: "https://example.com/acme/repo.git", repoRef: "main" }), { status: 200 });
+      if (url.includes("/session?directory=")) return new Response(JSON.stringify({ sessionId: "session-1" }), { status: 200 });
+      if (url.includes("http://127.0.0.1:3100/api/agents/")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities], config: { remoteServerDefault: { mode: "fixed", baseUrl: "https://remote.example.com" } } });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({ companies: [{ id: companyId, name: "Test Company", description: null, status: "active", pauseReason: null, pausedAt: null, issuePrefix: "TPC", issueCounter: 1, budgetMonthlyCents: 0, spentMonthlyCents: 0, requireBoardApprovalForNewAgents: false, feedbackDataSharingEnabled: false, feedbackDataSharingConsentAt: null, feedbackDataSharingConsentByUserId: null, feedbackDataSharingTermsVersion: null, brandColor: null, logoAssetId: null, logoUrl: null, createdAt: new Date(), updatedAt: new Date() } as any], projects: [makeProject()], agents: [makeManagedAgent({
+      executionMode: "local_cli",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Researcher\n",
+      localCli: {
+        command: ["opencode"],
+      },
+    })] });
+    await harness.ctx.state.set({ scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND, scopeId: workspaceId, namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE, stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY }, makeSyncState(null));
+
+    await harness.performAction<any>(OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY, { companyId, projectId });
+
+    const patchCall = (fetchMock.mock.calls as Array<[string, RequestInit | undefined]>).find(([url, init]) => String(url).includes("http://127.0.0.1:3100/api/agents/") && init?.method === "PATCH");
+    expect(patchCall).toBeTruthy();
+    const body = JSON.parse(String(patchCall?.[1]?.body ?? "{}"));
+    expect(body.replaceAdapterConfig).toBe(true);
+    expect(body.adapterConfig).toEqual(expect.objectContaining({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Researcher\n",
+      remoteServer: expect.objectContaining({
+        baseUrl: "https://remote.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: expect.objectContaining({ linkedDirectoryHint: "/remote/repo" }),
+      }),
+    }));
+    expect(body.adapterConfig.localCli).toBeUndefined();
+  });
+
+  it("accepts directory/worktree path evidence when cwd/repoRoot are absent", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/global/health")) return new Response(JSON.stringify({ serverScope: "shared" }), { status: 200 });
+      if (url.endsWith("/project/current")) return new Response(JSON.stringify({ id: "remote-project", name: "Remote Forgebox" }), { status: 200 });
+      if (url.endsWith("/path")) return new Response(JSON.stringify({ directory: "/remote/repo", worktree: "/remote/repo" }), { status: 200 });
+      if (url.endsWith("/vcs")) return new Response(JSON.stringify({ repoUrl: "https://example.com/acme/repo.git", repoRef: "main" }), { status: 200 });
+      if (url.includes("/session?directory=")) return new Response(JSON.stringify({ sessionId: "session-1" }), { status: 200 });
+      if (url.includes("http://127.0.0.1:3100/api/agents/")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities], config: { remoteServerDefault: { mode: "fixed", baseUrl: "https://remote.example.com" } } });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({ companies: [{ id: companyId, name: "Test Company", description: null, status: "active", pauseReason: null, pausedAt: null, issuePrefix: "TPC", issueCounter: 1, budgetMonthlyCents: 0, spentMonthlyCents: 0, requireBoardApprovalForNewAgents: false, feedbackDataSharingEnabled: false, feedbackDataSharingConsentAt: null, feedbackDataSharingConsentByUserId: null, feedbackDataSharingTermsVersion: null, brandColor: null, logoAssetId: null, logoUrl: null, createdAt: new Date(), updatedAt: new Date() } as any], projects: [makeProject()], agents: [makeManagedAgent()] });
+    await harness.ctx.state.set({ scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND, scopeId: workspaceId, namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE, stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY }, makeSyncState(null));
+
+    const result = await harness.performAction<any>(OPENCODE_PROJECT_LINK_REMOTE_CONTEXT_ACTION_KEY, { companyId, projectId });
+    expect(result.remoteLink.linkedDirectoryHint).toBe("/remote/repo");
+  });
+
   it("marks refresh stale on repo mismatch and blocks sync", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (url.endsWith("/global/health")) return new Response(JSON.stringify({ serverScope: "shared" }), { status: 200 });
@@ -342,6 +406,67 @@ describe("remote linking lifecycle", () => {
 
     const result = await harness.performAction<any>(OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY, { companyId, projectId });
     expect(result).toEqual({ cleared: true, updatedImportedAgentCount: 1 });
+  });
+
+  it("replaces adapter config during remote-link clear so stale linked fields are removed", async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("http://127.0.0.1:3100/api/agents/")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const harness = createTestHarness({ manifest, capabilities: [...manifest.capabilities] });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({ companies: [{ id: companyId, name: "Test Company", description: null, status: "active", pauseReason: null, pausedAt: null, issuePrefix: "TPC", issueCounter: 1, budgetMonthlyCents: 0, spentMonthlyCents: 0, requireBoardApprovalForNewAgents: false, feedbackDataSharingEnabled: false, feedbackDataSharingConsentAt: null, feedbackDataSharingConsentByUserId: null, feedbackDataSharingTermsVersion: null, brandColor: null, logoAssetId: null, logoUrl: null, createdAt: new Date(), updatedAt: new Date() } as any], projects: [makeProject()], agents: [makeManagedAgent({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Researcher\n",
+      remoteServer: {
+        baseUrl: "https://remote.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: { linkedDirectoryHint: "/remote/repo" },
+      },
+      localCli: {
+        command: ["opencode"],
+      },
+    })] });
+    await harness.ctx.state.set({ scopeKind: OPENCODE_PROJECT_SYNC_STATE_SCOPE_KIND, scopeId: workspaceId, namespace: OPENCODE_PROJECT_SYNC_STATE_NAMESPACE, stateKey: OPENCODE_PROJECT_SYNC_STATE_KEY }, makeSyncState({
+      version: 2,
+      status: "linked",
+      baseUrl: "https://remote.example.com",
+      serverScope: "shared",
+      targetMode: "linked_project_context",
+      canonicalWorkspaceId: workspaceId,
+      canonicalRepoRoot: repoRoot,
+      linkedDirectoryHint: "/remote/repo",
+      projectEvidence: { projectId: "remote-project", projectName: "Remote Forgebox", pathCwd: "/remote/repo", repoRoot: "/remote/repo", repoUrl: "https://example.com/acme/repo.git", repoRef: "main" },
+      validatedAt: "2026-04-16T12:00:00.000Z",
+      invalidatedAt: null,
+      invalidReason: null,
+      lastHealthOkAt: "2026-04-16T12:00:00.000Z",
+      lastSyncAt: null,
+      lastRunAt: null,
+      propagatedToImportedAgentsAt: null,
+    }));
+
+    await harness.performAction<any>(OPENCODE_PROJECT_CLEAR_REMOTE_LINK_ACTION_KEY, { companyId, projectId });
+
+    const patchCall = (fetchMock.mock.calls as Array<[string, RequestInit | undefined]>).find(([url, init]) => String(url).includes("http://127.0.0.1:3100/api/agents/") && init?.method === "PATCH");
+    expect(patchCall).toBeTruthy();
+    const body = JSON.parse(String(patchCall?.[1]?.body ?? "{}"));
+    expect(body.replaceAdapterConfig).toBe(true);
+    expect(body.adapterConfig).toEqual(expect.objectContaining({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Researcher\n",
+      remoteServer: expect.objectContaining({
+        baseUrl: "https://remote.example.com",
+        auth: { mode: "none" },
+        projectTarget: { mode: "server_default" },
+      }),
+    }));
+    expect(body.adapterConfig.localCli).toBeUndefined();
   });
 
   it("fails on partial propagation errors", async () => {

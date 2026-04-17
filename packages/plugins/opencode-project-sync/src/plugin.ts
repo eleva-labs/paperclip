@@ -467,42 +467,45 @@ function buildRemoteHeaders(): HeadersInit {
 }
 
 async function validateRemoteProjectContext(input: {
-  ctx: PluginContext;
   resolvedWorkspace: ResolvedCanonicalWorkspace;
   baseUrl: string;
   previousRemoteLink: OpencodeProjectSyncState["remoteLink"];
 }): Promise<RemoteValidationSnapshot> {
-  const { ctx, resolvedWorkspace } = input;
+  const { resolvedWorkspace } = input;
   const baseUrl = normalizeBaseUrl(input.baseUrl);
 
   const health = await readJsonResponse<Record<string, unknown>>(
-    await ctx.http.fetch(`${baseUrl}/global/health`, { method: "GET", headers: buildRemoteHeaders() }),
+    await fetch(`${baseUrl}/global/health`, { method: "GET", headers: buildRemoteHeaders() }),
     "REMOTE_SERVER_UNHEALTHY: GET /global/health failed",
   );
   const projectCurrent = await readJsonResponse<Record<string, unknown>>(
-    await ctx.http.fetch(`${baseUrl}/project/current`, { method: "GET", headers: buildRemoteHeaders() }),
+    await fetch(`${baseUrl}/project/current`, { method: "GET", headers: buildRemoteHeaders() }),
     "REMOTE_LINK_BROKEN: GET /project/current failed",
   );
   const pathInfo = await readJsonResponse<Record<string, unknown>>(
-    await ctx.http.fetch(`${baseUrl}/path`, { method: "GET", headers: buildRemoteHeaders() }),
+    await fetch(`${baseUrl}/path`, { method: "GET", headers: buildRemoteHeaders() }),
     "REMOTE_LINK_BROKEN: GET /path failed",
   );
   const vcsInfo = await readJsonResponse<Record<string, unknown>>(
-    await ctx.http.fetch(`${baseUrl}/vcs`, { method: "GET", headers: buildRemoteHeaders() }),
+    await fetch(`${baseUrl}/vcs`, { method: "GET", headers: buildRemoteHeaders() }),
     "REMOTE_LINK_BROKEN: GET /vcs failed",
   );
 
-  const linkedDirectoryHint = typeof pathInfo.cwd === "string" && pathInfo.cwd.trim().length > 0
-    ? pathInfo.cwd.trim()
-    : typeof pathInfo.repoRoot === "string" && pathInfo.repoRoot.trim().length > 0
-      ? pathInfo.repoRoot.trim()
-      : null;
+  const linkedDirectoryHint = typeof pathInfo.directory === "string" && pathInfo.directory.trim().length > 0
+    ? pathInfo.directory.trim()
+    : typeof pathInfo.worktree === "string" && pathInfo.worktree.trim().length > 0
+      ? pathInfo.worktree.trim()
+      : typeof pathInfo.cwd === "string" && pathInfo.cwd.trim().length > 0
+        ? pathInfo.cwd.trim()
+        : typeof pathInfo.repoRoot === "string" && pathInfo.repoRoot.trim().length > 0
+          ? pathInfo.repoRoot.trim()
+          : null;
   if (!linkedDirectoryHint) {
     throw new Error("REMOTE_TARGET_MISSING_HINT: remote project/path evidence did not provide a linked directory hint.");
   }
 
   await assertHttpOk(
-    await ctx.http.fetch(`${baseUrl}/session?directory=${encodeURIComponent(linkedDirectoryHint)}`, {
+    await fetch(`${baseUrl}/session?directory=${encodeURIComponent(linkedDirectoryHint)}`, {
       method: "POST",
       headers: buildRemoteHeaders(),
       body: JSON.stringify({ model: "openai/gpt-5.4", prompt: "Paperclip remote link validation probe." }),
@@ -513,8 +516,16 @@ async function validateRemoteProjectContext(input: {
   const projectEvidence = {
     projectId: typeof projectCurrent.id === "string" ? projectCurrent.id : null,
     projectName: typeof projectCurrent.name === "string" ? projectCurrent.name : null,
-    pathCwd: typeof pathInfo.cwd === "string" ? pathInfo.cwd : null,
-    repoRoot: typeof pathInfo.repoRoot === "string" ? pathInfo.repoRoot : null,
+    pathCwd: typeof pathInfo.cwd === "string"
+      ? pathInfo.cwd
+      : typeof pathInfo.directory === "string"
+        ? pathInfo.directory
+        : null,
+    repoRoot: typeof pathInfo.repoRoot === "string"
+      ? pathInfo.repoRoot
+      : typeof pathInfo.worktree === "string"
+        ? pathInfo.worktree
+        : null,
     repoUrl: typeof vcsInfo.repoUrl === "string" ? vcsInfo.repoUrl : null,
     repoRef: typeof vcsInfo.repoRef === "string" ? vcsInfo.repoRef : null,
   };
@@ -604,6 +615,7 @@ async function propagateRemoteLinkToImportedAgents(input: {
         title: agent.title,
         adapterType: agent.adapterType,
         adapterConfig: nextAdapterConfig,
+        replaceAdapterConfig: true,
         metadata: agent.metadata,
       }),
     });
@@ -644,6 +656,7 @@ async function propagateServerDefaultToImportedAgents(input: {
         title: agent.title,
         adapterType: agent.adapterType,
         adapterConfig: nextAdapterConfig,
+        replaceAdapterConfig: true,
         metadata: agent.metadata,
       }),
     });
@@ -681,11 +694,10 @@ async function linkRemoteProjectContext(
     throw new Error("REMOTE_BASE_URL_UNSET: no explicit base URL was provided and no plugin company default is configured.");
   }
 
-  const validation = await validateRemoteProjectContext({
-    ctx,
-    resolvedWorkspace,
-    baseUrl,
-    previousRemoteLink: state.remoteLink,
+    const validation = await validateRemoteProjectContext({
+      resolvedWorkspace,
+      baseUrl,
+      previousRemoteLink: state.remoteLink,
   });
   const propagation = await propagateRemoteLinkToImportedAgents({
     ctx,
@@ -725,7 +737,6 @@ async function refreshRemoteLink(
 
   try {
     const validation = await validateRemoteProjectContext({
-      ctx,
       resolvedWorkspace,
       baseUrl: state.remoteLink.baseUrl,
       previousRemoteLink: state.remoteLink,

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   importedOpencodeAgentMetadataSchema,
+  opencodeImportedAgentAdapterConfigSchema,
+  opencodeProjectClearRemoteLinkInputSchema,
   opencodeProjectClearRemoteLinkResultSchema,
   opencodeProjectConflictSchema,
   opencodeProjectFinalizeSyncInputSchema,
+  opencodeProjectLinkRemoteContextInputSchema,
   opencodeProjectLinkRemoteContextResultSchema,
+  opencodeProjectRefreshRemoteLinkInputSchema,
+  opencodeProjectResolveRemoteModeStatusInputSchema,
   opencodeProjectResolveRemoteModeStatusResultSchema,
   opencodeProjectSyncCompanySettingsSchema,
   opencodeProjectPlannedAgentUpsertSchema,
@@ -282,6 +287,101 @@ describe("opencode project package schemas", () => {
         paperclipAgentId: "33333333-3333-4333-8333-333333333333",
       }],
       unexpectedTopLevelField: true,
+    }).success).toBe(false);
+  });
+
+  it("accepts renderEnvironment on remote link lifecycle inputs", () => {
+    const renderEnvironment = {
+      environment: "hostInline",
+      launcherId: null,
+      bounds: "default",
+    };
+
+    expect(opencodeProjectResolveRemoteModeStatusInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      renderEnvironment,
+    }).success).toBe(true);
+
+    expect(opencodeProjectLinkRemoteContextInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      baseUrl: "http://127.0.0.1:4096",
+      renderEnvironment,
+    }).success).toBe(true);
+
+    expect(opencodeProjectRefreshRemoteLinkInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      renderEnvironment,
+    }).success).toBe(true);
+
+    expect(opencodeProjectClearRemoteLinkInputSchema.safeParse({
+      companyId: "11111111-1111-4111-8111-111111111111",
+      projectId: "22222222-2222-4222-8222-222222222222",
+      renderEnvironment,
+    }).success).toBe(true);
+  });
+
+  it("accepts linked remote imported agent config shape", () => {
+    expect(opencodeImportedAgentAdapterConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Orchestrator\n",
+      remoteServer: {
+        baseUrl: "http://127.0.0.1:4096",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: {
+          mode: "linked_project_context",
+          canonicalWorkspaceId: "33333333-3333-4333-8333-333333333333",
+          linkedDirectoryHint: "/repos/canonical",
+          serverScope: "shared",
+          validatedAt: "2026-04-16T12:00:00.000Z",
+        },
+      },
+    }).success).toBe(true);
+  });
+
+  it("rejects rich plugin remoteLink shape for imported agent adapter config", () => {
+    expect(opencodeImportedAgentAdapterConfigSchema.safeParse({
+      executionMode: "remote_server",
+      model: "openai/gpt-5.4",
+      promptTemplate: "# Orchestrator\n",
+      remoteServer: {
+        baseUrl: "http://127.0.0.1:4096",
+        auth: { mode: "none" },
+        healthTimeoutSec: 10,
+        requireHealthyServer: true,
+        projectTarget: { mode: "linked_project_context" },
+        linkRef: {
+          version: 2,
+          status: "linked",
+          baseUrl: "http://127.0.0.1:4096",
+          targetMode: "linked_project_context",
+          canonicalWorkspaceId: "33333333-3333-4333-8333-333333333333",
+          canonicalRepoRoot: "/repos/canonical",
+          linkedDirectoryHint: "/repos/canonical",
+          serverScope: "shared",
+          projectEvidence: {
+            projectId: "remote-project",
+            projectName: null,
+            pathCwd: "/repos/canonical",
+            repoRoot: "/repos/canonical",
+            repoUrl: null,
+            repoRef: null,
+          },
+          validatedAt: "2026-04-16T12:00:00.000Z",
+          invalidatedAt: null,
+          invalidReason: null,
+          lastHealthOkAt: "2026-04-16T12:00:00.000Z",
+          lastSyncAt: null,
+          lastRunAt: null,
+          propagatedToImportedAgentsAt: null,
+        },
+      },
     }).success).toBe(false);
   });
 

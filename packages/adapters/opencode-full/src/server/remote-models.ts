@@ -24,6 +24,32 @@ function dedupe(models: AdapterModel[]) {
     .sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true, sensitivity: "base" }));
 }
 
+function listProviderModelIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      const text = typeof entry === "string"
+        ? entry.trim()
+        : asString(parseObject(entry).id, "").trim()
+          || asString(parseObject(entry).modelID, "").trim()
+          || asString(parseObject(entry).name, "").trim();
+      return text ? [text] : [];
+    });
+  }
+
+  const record = parseObject(value);
+  const keys = Object.keys(record);
+  if (keys.length === 0) return [];
+
+  return keys.flatMap((key) => {
+    const model = parseObject(record[key]);
+    const text = asString(model.id, "").trim()
+      || asString(model.modelID, "").trim()
+      || asString(model.name, "").trim()
+      || key.trim();
+    return text ? [text] : [];
+  });
+}
+
 function fromProviders(payload: unknown): AdapterModel[] {
   const data = parseObject(payload);
   const defaults = parseObject(data.default);
@@ -34,14 +60,9 @@ function fromProviders(payload: unknown): AdapterModel[] {
     const id = asString(provider.id, "").trim() || asString(provider.providerID, "").trim() || asString(provider.name, "").trim();
     if (!id) return [];
 
-    const models = Array.isArray(provider.models) ? provider.models : [];
-    const listed = models.flatMap((entry) => {
-      const text = typeof entry === "string"
-        ? entry.trim()
-        : asString(parseObject(entry).id, "").trim() || asString(parseObject(entry).modelID, "").trim() || asString(parseObject(entry).name, "").trim();
-      if (!text) return [];
-      return [{ id: `${id}/${text}`, label: `${id}/${text}` } satisfies AdapterModel];
-    });
+    const listed = listProviderModelIds(provider.models).map((modelId) => (
+      { id: `${id}/${modelId}`, label: `${id}/${modelId}` } satisfies AdapterModel
+    ));
 
     const fallback = asString(defaults[id], "").trim();
     if (listed.length > 0) return listed;

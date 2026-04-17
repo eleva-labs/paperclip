@@ -92,6 +92,16 @@ type DerivedRemoteServerConfigOptions = {
   remoteLink: OpencodeRemoteLinkRef | null;
 };
 
+function toImportedAgentLinkedTarget(remoteLink: OpencodeRemoteLinkRef): Record<string, unknown> {
+  return {
+    mode: "linked_project_context",
+    canonicalWorkspaceId: remoteLink.canonicalWorkspaceId,
+    linkedDirectoryHint: remoteLink.linkedDirectoryHint,
+    serverScope: remoteLink.serverScope,
+    validatedAt: remoteLink.validatedAt,
+  };
+}
+
 function toLocator(repoRoot: string, repoRelPath: string): string {
   return `${repoRoot}::${repoRelPath}`;
 }
@@ -190,7 +200,7 @@ function buildRemoteServerDefaults(options: DerivedRemoteServerConfigOptions): R
       healthTimeoutSec: DEFAULT_OPENCODE_FULL_REMOTE_HEALTH_TIMEOUT_SEC,
       requireHealthyServer: DEFAULT_OPENCODE_FULL_REMOTE_REQUIRE_HEALTHY_SERVER,
       projectTarget: { mode: "linked_project_context" },
-      linkRef: options.remoteLink,
+      linkRef: toImportedAgentLinkedTarget(options.remoteLink),
     };
   }
 
@@ -209,7 +219,10 @@ export function buildManagedImportedAgentAdapterConfigForRemoteLink(input: {
   remoteLink: OpencodeRemoteLinkRef;
 }): Record<string, unknown> {
   return withSharedOpencodeFullDefaults({
-    ...input.existingConfig,
+    model: input.existingConfig.model,
+    variant: input.existingConfig.variant,
+    promptTemplate: input.existingConfig.promptTemplate,
+    bootstrapPromptTemplate: input.existingConfig.bootstrapPromptTemplate,
     executionMode: "remote_server",
     remoteServer: buildRemoteServerDefaults({
       existingConfig: input.existingConfig,
@@ -224,7 +237,10 @@ export function buildManagedImportedAgentAdapterConfigForServerDefault(input: {
   baseUrl: string;
 }): Record<string, unknown> {
   return withSharedOpencodeFullDefaults({
-    ...input.existingConfig,
+    model: input.existingConfig.model,
+    variant: input.existingConfig.variant,
+    promptTemplate: input.existingConfig.promptTemplate,
+    bootstrapPromptTemplate: input.existingConfig.bootstrapPromptTemplate,
     executionMode: "remote_server",
     remoteServer: buildRemoteServerDefaults({
       existingConfig: input.existingConfig,

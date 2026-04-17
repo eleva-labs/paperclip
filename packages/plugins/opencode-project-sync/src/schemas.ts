@@ -159,9 +159,16 @@ export const opencodeRemoteLinkRefSchema = z.object({
   propagatedToImportedAgentsAt: z.string().datetime().nullable(),
 }).strict();
 
+const pluginLauncherRenderContextSnapshotSchema = z.object({
+  environment: z.enum(PLUGIN_LAUNCHER_RENDER_ENVIRONMENTS).nullable(),
+  launcherId: z.string().min(1).nullable(),
+  bounds: z.enum(PLUGIN_LAUNCHER_BOUNDS).nullable(),
+}).strict();
+
 export const opencodeProjectResolveRemoteModeStatusInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
+  renderEnvironment: pluginLauncherRenderContextSnapshotSchema.nullish(),
 }).strict();
 
 export const opencodeProjectResolveRemoteModeStatusResultSchema = z.object({
@@ -177,6 +184,7 @@ export const opencodeProjectLinkRemoteContextInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
   baseUrl: z.string().trim().url().optional(),
+  renderEnvironment: pluginLauncherRenderContextSnapshotSchema.nullish(),
 }).strict();
 
 export const opencodeProjectLinkRemoteContextResultSchema = z.object({
@@ -188,6 +196,7 @@ export const opencodeProjectLinkRemoteContextResultSchema = z.object({
 export const opencodeProjectRefreshRemoteLinkInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
+  renderEnvironment: pluginLauncherRenderContextSnapshotSchema.nullish(),
 }).strict();
 
 export const opencodeProjectRefreshRemoteLinkResultSchema = z.object({
@@ -198,6 +207,7 @@ export const opencodeProjectRefreshRemoteLinkResultSchema = z.object({
 export const opencodeProjectClearRemoteLinkInputSchema = z.object({
   companyId: z.string().uuid(),
   projectId: z.string().uuid(),
+  renderEnvironment: pluginLauncherRenderContextSnapshotSchema.nullish(),
 }).strict();
 
 export const opencodeProjectClearRemoteLinkResultSchema = z.object({
@@ -211,6 +221,14 @@ export const opencodeImportedAgentRemoteAuthSchema = z.discriminatedUnion("mode"
   z.object({ mode: z.literal("basic"), username: z.string().min(1), password: z.unknown() }).strict(),
   z.object({ mode: z.literal("header"), headerName: z.string().min(1), headerValue: z.unknown() }).strict(),
 ]);
+
+const opencodeImportedAgentLinkedRemoteTargetSchema = z.object({
+  mode: z.literal("linked_project_context"),
+  canonicalWorkspaceId: z.string().uuid(),
+  linkedDirectoryHint: z.string().min(1),
+  serverScope: z.enum(["shared", "dedicated_single_company", "unknown"]),
+  validatedAt: z.string().datetime(),
+}).strict();
 
 export const opencodeImportedAgentAdapterConfigSchema = z.discriminatedUnion("executionMode", [
   z.object({
@@ -246,7 +264,11 @@ export const opencodeImportedAgentAdapterConfigSchema = z.discriminatedUnion("ex
       auth: opencodeImportedAgentRemoteAuthSchema.optional(),
       healthTimeoutSec: z.number().int().positive().optional(),
       requireHealthyServer: z.boolean().optional(),
-      projectTarget: z.object({ mode: z.literal("server_default") }).strict().optional(),
+      projectTarget: z.discriminatedUnion("mode", [
+        z.object({ mode: z.literal("server_default") }).strict(),
+        z.object({ mode: z.literal("linked_project_context") }).strict(),
+      ]).optional(),
+      linkRef: opencodeImportedAgentLinkedRemoteTargetSchema.optional(),
     }).strict(),
   }).strict(),
   z.object({
@@ -351,12 +373,6 @@ export const opencodeProjectAppliedSkillResultSchema = z.array(z.never()).max(0)
 export const opencodeProjectAppliedAgentResultSchema = z.object({
   externalAgentKey: z.string().min(1),
   paperclipAgentId: z.string().uuid(),
-}).strict();
-
-const pluginLauncherRenderContextSnapshotSchema = z.object({
-  environment: z.enum(PLUGIN_LAUNCHER_RENDER_ENVIRONMENTS).nullable(),
-  launcherId: z.string().min(1).nullable(),
-  bounds: z.enum(PLUGIN_LAUNCHER_BOUNDS).nullable(),
 }).strict();
 
 const opencodeProjectFinalizeAgentUpsertSchema = z.union([

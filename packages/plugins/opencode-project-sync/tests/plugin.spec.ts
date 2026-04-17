@@ -11,6 +11,8 @@ import type { Company, Project } from "@paperclipai/plugin-sdk";
 import manifest, {
   OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY,
   OPENCODE_PROJECT_EXPORT_ACTION_KEY,
+  OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY,
+  OPENCODE_PROJECT_SYNC_PLUGIN_ID,
   OPENCODE_PROJECT_SYNC_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY,
   OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY,
@@ -591,8 +593,8 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
       warnings: [],
       skillUpserts: [],
       agentUpserts: [{
-        operation: "create",
-        paperclipAgentId: null,
+        operation: "update",
+        paperclipAgentId: "agent-writer",
         externalAgentKey: "writer",
         repoRelPath: ".opencode/agents/writer.md",
         payload: {
@@ -652,7 +654,7 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     seedUiAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, vi.fn(async () => ({ ok: true })));
     seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
 
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.endsWith(`/companies/${companyId}/agents` as string)) {
         return { ok: true, status: 200, json: async () => ({ id: "agent-writer" }) };
       }
@@ -711,6 +713,11 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
       selectedAgentKeys: ["writer"],
       appliedAgents: [{ externalAgentKey: "writer", paperclipAgentId: "agent-writer" }],
     }));
+    const updateCall = (fetchMock.mock.calls as Array<[string, RequestInit | undefined]>).find(([url, init]) => String(url).includes(`/agents/${encodeURIComponent("agent-writer")}`) && init?.method === "PATCH");
+    expect(updateCall).toBeTruthy();
+    const updateBody = JSON.parse(String(updateCall?.[1]?.body ?? "{}"));
+    expect(updateBody.replaceAdapterConfig).toBe(true);
+    expect(updateBody.adapterConfig).toEqual({ promptTemplate: "# Writer" });
     expect(container.textContent).toContain("0 skills created, 0 updated");
 
     vi.unstubAllGlobals();
@@ -790,6 +797,118 @@ describe("opencode project sync plugin cycle 3.1 ui", () => {
     expect(syncAction).not.toHaveBeenCalled();
     expect(finalizeAction).not.toHaveBeenCalled();
 
+    root.unmount();
+    container.remove();
+  });
+
+  it("merges existing plugin config when saving the remote base URL", async () => {
+    const { ProjectDetailTab } = await import("../src/ui/index.js");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    seedUiData(OPENCODE_PROJECT_SYNC_STATE_DATA_KEY, {
+      workspace: { projectId, workspaceId, cwd: "/repo", repoUrl: null, repoRef: null },
+      state: {
+        sourceOfTruth: "repo_first",
+        bootstrapCompletedAt: "2026-04-11T12:00:00.000Z",
+        canonicalRepoRoot: "/repo",
+        canonicalRepoUrl: null,
+        canonicalRepoRef: null,
+        lastScanFingerprint: "scan-save-url",
+        lastImportedAt: null,
+        lastExportedAt: null,
+        lastRuntimeTestAt: null,
+        warnings: [],
+        conflicts: [],
+        selectedAgents: [],
+        importedAgents: [],
+        importedSkills: [],
+      },
+    });
+    seedUiData(OPENCODE_PROJECT_SYNC_PREVIEW_DATA_KEY, {
+      preview: {
+        lastScanFingerprint: "scan-save-url",
+        warnings: [],
+        eligibleAgents: [],
+        ineligibleNestedAgents: [],
+        ignoredArtifacts: [],
+      },
+    });
+    seedUiData(OPENCODE_PROJECT_REMOTE_MODE_STATUS_DATA_KEY, {
+      canonicalWorkspaceId: workspaceId,
+      canonicalRepoRoot: "/repo",
+      companyBaseUrlDefault: "https://old.example.com",
+      remoteLink: null,
+      syncAllowed: true,
+      syncBlockReason: null,
+    });
+    seedUiAction(OPENCODE_PROJECT_BOOTSTRAP_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_SYNC_FINALIZE_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_EXPORT_ACTION_KEY, vi.fn(async () => ({ ok: true })));
+    seedUiAction(OPENCODE_PROJECT_TEST_RUNTIME_ACTION_KEY, vi.fn(async () => ({ ok: false, message: "unavailable" })));
+
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/plugins/${OPENCODE_PROJECT_SYNC_PLUGIN_ID}/config`) && (!init?.method || init.method === "GET")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            configJson: {
+              hostMutationTransport: "paperclip_rest_api_v1",
+              workerHostApiBaseUrl: "http://127.0.0.1:3100/api",
+              preferWorkerHttpMutations: true,
+              futureFlag: { enabled: true },
+              remoteServerDefault: { mode: "fixed", baseUrl: "https://old.example.com" },
+            },
+          }),
+        };
+      }
+
+      if (url.endsWith(`/plugins/${OPENCODE_PROJECT_SYNC_PLUGIN_ID}/config`) && init?.method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      root.render(React.createElement(ProjectDetailTab, { context: { ...pluginUiState.hostContext, entityId: projectId, entityType: "project" } }));
+    });
+
+    const input = container.querySelector('input[type="url"]') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+
+    await act(async () => {
+      if (input) {
+        const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        valueSetter?.call(input, "https://new.example.com/base");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Save base URL"));
+    await act(async () => {
+      saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const postCall = (fetchMock.mock.calls as Array<[string, RequestInit | undefined]>).find(
+      ([url, init]) => url.endsWith(`/plugins/${OPENCODE_PROJECT_SYNC_PLUGIN_ID}/config`) && init?.method === "POST",
+    );
+    expect(postCall).toBeTruthy();
+
+    const postBody = JSON.parse(String(postCall?.[1]?.body ?? "{}"));
+    expect(postBody.configJson).toEqual({
+      hostMutationTransport: "paperclip_rest_api_v1",
+      workerHostApiBaseUrl: "http://127.0.0.1:3100/api",
+      preferWorkerHttpMutations: true,
+      futureFlag: { enabled: true },
+      remoteServerDefault: { mode: "fixed", baseUrl: "https://new.example.com/base" },
+    });
+
+    vi.unstubAllGlobals();
     root.unmount();
     container.remove();
   });

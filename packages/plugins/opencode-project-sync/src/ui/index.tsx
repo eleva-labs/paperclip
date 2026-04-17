@@ -133,6 +133,10 @@ type RuntimeTestResult = {
   details?: Record<string, unknown>;
 };
 
+type PluginConfigResponse = {
+  configJson?: Record<string, unknown> | null;
+} | null;
+
 type ActionNoticeTone = "success" | "warning" | "error";
 
 type SyncActionResult = {
@@ -320,6 +324,7 @@ async function applySyncPlan(companyId: string, plan: SyncPlanResult) {
           title: upsert.payload.title,
           adapterType: upsert.payload.adapterType,
           adapterConfig: upsert.payload.adapterConfig,
+          replaceAdapterConfig: true,
           metadata: upsert.payload.metadata,
         }),
       });
@@ -496,11 +501,16 @@ function ProjectOpenCodePanelLoaded({
   const [lastAction, setLastAction] = useState<LastActionState>({ kind: "idle" });
   const [runtimeResult, setRuntimeResult] = useState<RuntimeTestResult | null>(null);
   const [selectedAgentPaths, setSelectedAgentPaths] = useState<string[]>([]);
+  const [remoteBaseUrlInput, setRemoteBaseUrlInput] = useState("");
 
   const state = stateQuery.data?.state ?? null;
   const workspace = stateQuery.data?.workspace ?? null;
   const preview = previewQuery.data?.preview ?? null;
   const remoteStatus = remoteStatusQuery.data ?? null;
+
+  useEffect(() => {
+    setRemoteBaseUrlInput(remoteStatus?.companyBaseUrlDefault ?? remoteStatus?.remoteLink?.baseUrl ?? "");
+  }, [remoteStatus?.companyBaseUrlDefault, remoteStatus?.remoteLink?.baseUrl]);
 
   useEffect(() => {
     if (!state?.importedAgents?.length) {
@@ -641,7 +651,7 @@ function ProjectOpenCodePanelLoaded({
   }
 
   async function runAction(
-    key: "bootstrap" | "sync" | "export" | "test" | "link" | "refresh-link" | "clear-link",
+    key: "bootstrap" | "sync" | "export" | "test" | "link" | "refresh-link" | "clear-link" | "save-base-url",
     run: () => Promise<unknown>,
     onSuccess: (result: unknown) => void,
   ) {
@@ -663,7 +673,12 @@ function ProjectOpenCodePanelLoaded({
   }
 
   function handleLinkRemote(): void {
-    void runAction("link", () => linkRemoteProjectContext({ companyId, projectId }), (result) => {
+    const trimmedBaseUrl = remoteBaseUrlInput.trim();
+    void runAction("link", () => linkRemoteProjectContext({
+      companyId,
+      projectId,
+      ...(trimmedBaseUrl.length > 0 ? { baseUrl: trimmedBaseUrl } : {}),
+    }), (result) => {
       const summary = result as { updatedImportedAgentCount: number; remoteLink: { linkedDirectoryHint: string } };
       setLastAction({
         kind: "success",
@@ -671,6 +686,45 @@ function ProjectOpenCodePanelLoaded({
         body: `Linked the project-level remote context and propagated ${summary.updatedImportedAgentCount} imported agent update(s) using directory hint ${summary.remoteLink.linkedDirectoryHint}.`,
       });
       toast({ title: "Remote project linked", tone: "success" });
+    });
+  }
+
+  async function saveRemoteBaseUrlDefault(): Promise<void> {
+    const trimmed = remoteBaseUrlInput.trim();
+    if (trimmed.length === 0) {
+      throw new Error("Remote base URL is required before saving.");
+    }
+    new URL(trimmed);
+
+    const existingConfig = await apiJson<PluginConfigResponse>(
+      `/api/plugins/${encodeURIComponent(OPENCODE_PROJECT_SYNC_PLUGIN_ID)}/config`,
+    );
+
+    await apiJson(`/api/plugins/${encodeURIComponent(OPENCODE_PROJECT_SYNC_PLUGIN_ID)}/config`, {
+      method: "POST",
+      body: JSON.stringify({
+        configJson: {
+          ...(existingConfig?.configJson ?? {}),
+          remoteServerDefault: {
+            mode: "fixed",
+            baseUrl: trimmed,
+          },
+        },
+      }),
+    });
+  }
+
+  function handleSaveRemoteBaseUrl(): void {
+    void runAction("save-base-url", async () => {
+      await saveRemoteBaseUrlDefault();
+      return { ok: true };
+    }, () => {
+      setLastAction({
+        kind: "success",
+        title: "Remote base URL saved",
+        body: `Saved company default OpenCode base URL as ${remoteBaseUrlInput.trim()}.`,
+      });
+      toast({ title: "Remote base URL saved", tone: "success" });
     });
   }
 
@@ -847,6 +901,34 @@ function ProjectOpenCodePanelLoaded({
 
       {remoteStatus ? (
         <Section title="Remote project context">
+          <div style={{ display: "grid", gap: 8 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+              <strong>Remote OpenCode base URL</strong>
+              <input
+                type="url"
+                value={remoteBaseUrlInput}
+                onChange={(event) => setRemoteBaseUrlInput(event.target.value)}
+                placeholder="http://127.0.0.1:4096"
+                style={{
+                  width: "100%",
+                  border: "1px solid var(--border, #2f3545)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  background: "transparent",
+                  color: "inherit",
+                  fontSize: 12,
+                }}
+              />
+            </label>
+            <div style={rowStyle}>
+              <button type="button" style={buttonStyle()} disabled={runningAction !== null} onClick={handleSaveRemoteBaseUrl}>
+                {runningAction === "save-base-url" ? "Saving…" : "Save base URL"}
+              </button>
+            </div>
+            <div style={{ fontSize: 12, lineHeight: 1.55, opacity: 0.82 }}>
+              This value is stored as the plugin company default and used by Link remote when no explicit override is passed.
+            </div>
+          </div>
           <div style={gridStyle}>
             <KeyValue label="Company default base URL" value={remoteStatus.companyBaseUrlDefault ?? "Unset"} />
             <KeyValue label="Canonical workspace id" value={remoteStatus.canonicalWorkspaceId} />

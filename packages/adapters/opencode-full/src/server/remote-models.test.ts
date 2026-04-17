@@ -59,6 +59,31 @@ describe("opencode_full remote models", () => {
     ]);
   });
 
+  it("maps provider model object maps into Paperclip model ids", async () => {
+    mocked.getRemoteProviders.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: "",
+      data: {
+        providers: [
+          {
+            id: "openai",
+            models: {
+              "gpt-5.4": { id: "gpt-5.4", providerID: "openai", name: "GPT-5.4" },
+              "gpt-5.4-mini": { id: "gpt-5.4-mini", providerID: "openai", name: "GPT-5.4 Mini" },
+            },
+          },
+        ],
+        default: { openai: "gpt-5.4-mini" },
+      },
+    });
+
+    await expect(discoverRemoteServerOpenCodeModels(config as never)).resolves.toEqual([
+      { id: "openai/gpt-5.4", label: "openai/gpt-5.4" },
+      { id: "openai/gpt-5.4-mini", label: "openai/gpt-5.4-mini" },
+    ]);
+  });
+
   it("falls back to provider inventory when providers endpoint lacks model lists", async () => {
     mocked.getRemoteProviders.mockResolvedValue({ ok: true, status: 200, text: "", data: { providers: [{ id: "openai" }], default: {} } });
     mocked.getRemoteProvider.mockResolvedValue({ ok: true, status: 200, text: "", data: { all: [{ id: "openai", defaultModel: "gpt-5.4" }] } });
