@@ -29,6 +29,7 @@ import {
   DEFAULT_CODEX_LOCAL_MODEL,
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
+import { DEFAULT_OPENCODE_FULL_MODEL } from "../../../packages/adapters/opencode-full/src/ui/index";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 
 function createValuesForAdapterType(
@@ -44,6 +45,8 @@ function createValuesForAdapterType(
     nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
   } else if (adapterType === "cursor") {
     nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
+  } else if (adapterType === "opencode_full") {
+    nextValues.model = DEFAULT_OPENCODE_FULL_MODEL;
   } else if (adapterType === "opencode_local") {
     nextValues.model = "";
   }
@@ -179,6 +182,9 @@ export function NewAgent() {
       runtimeConfig: buildNewAgentRuntimeConfig({
         heartbeatEnabled: configValues.heartbeatEnabled,
         intervalSec: configValues.intervalSec,
+        adapterType: configValues.adapterType,
+        model: configValues.model,
+        adapterSchemaValues: configValues.adapterSchemaValues,
       }),
       budgetMonthlyCents: 0,
     });

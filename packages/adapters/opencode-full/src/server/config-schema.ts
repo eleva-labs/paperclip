@@ -1,0 +1,368 @@
+import type { AdapterConfigSchema } from "@paperclipai/adapter-utils";
+import { envBindingSchema } from "@paperclipai/shared";
+import { z } from "zod";
+import { validateRemoteServerBaseUrl } from "./remote-base-url.js";
+
+export const opencodeFullExecutionModeSchema = z.enum([
+  "local_cli",
+  "remote_server",
+  "local_sdk",
+]);
+
+export const opencodeFullSharedPersistedConfigSchema = z.object({
+  executionMode: opencodeFullExecutionModeSchema,
+  model: z.string().trim().min(1),
+  variant: z.string().trim().min(1).optional(),
+  promptTemplate: z.string().optional(),
+  bootstrapPromptTemplate: z.string().optional(),
+  timeoutSec: z.number().int().positive().default(120),
+  connectTimeoutSec: z.number().int().positive().default(10),
+  eventStreamIdleTimeoutSec: z.number().int().positive().default(30),
+  failFastWhenUnavailable: z.boolean().default(true),
+});
+
+export const opencodeFullLocalCliPersistedConfigSchema = z.object({
+  command: z.string().trim().min(1).default("opencode"),
+  allowProjectConfig: z.boolean().default(true),
+  dangerouslySkipPermissions: z.boolean().default(false),
+  graceSec: z.number().int().nonnegative().default(5),
+  env: z.record(envBindingSchema).default({}),
+});
+
+export const opencodeFullRemoteAuthPersistedSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("none") }),
+  z.object({
+    mode: z.literal("bearer"),
+    token: envBindingSchema,
+  }),
+  z.object({
+    mode: z.literal("basic"),
+    username: z.string().trim().min(1),
+    password: envBindingSchema,
+  }),
+  z.object({
+    mode: z.literal("header"),
+    headerName: z.string().trim().min(1),
+    headerValue: envBindingSchema,
+  }),
+]);
+
+export const opencodeFullLinkedRemoteTargetSchema = z.object({
+  mode: z.literal("linked_project_context"),
+  canonicalWorkspaceId: z.string().uuid(),
+  linkedDirectoryHint: z.string().trim().min(1),
+  serverScope: z.enum(["shared", "dedicated_single_company", "unknown"]),
+  validatedAt: z.string().datetime(),
+}).strict();
+
+export const opencodeFullRemoteProjectTargetShapeSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("server_default") }).strict(),
+  z.object({ mode: z.literal("linked_project_context") }).strict(),
+]);
+
+export const opencodeFullRemoteProjectTargetSchema = opencodeFullRemoteProjectTargetShapeSchema;
+
+export const opencodeFullRemoteServerPersistedConfigSchema = z.object({
+  baseUrl: z.string().trim().url().superRefine((value, ctx) => {
+    const result = validateRemoteServerBaseUrl(value);
+    if (!result.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message,
+      });
+    }
+  }),
+  auth: opencodeFullRemoteAuthPersistedSchema.default({ mode: "none" }),
+  healthTimeoutSec: z.number().int().positive().default(10),
+  requireHealthyServer: z.boolean().default(true),
+  projectTarget: opencodeFullRemoteProjectTargetSchema.default({ mode: "server_default" }),
+  linkRef: opencodeFullLinkedRemoteTargetSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (value.projectTarget.mode === "linked_project_context" && !value.linkRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["linkRef"],
+      message: "linkRef is required when projectTarget.mode=linked_project_context",
+    });
+  }
+
+  if (value.projectTarget.mode === "server_default" && value.linkRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["linkRef"],
+      message: "linkRef must be omitted when projectTarget.mode=server_default",
+    });
+  }
+});
+
+export const opencodeFullLocalSdkPersistedConfigSchema = z.object({
+  sdkProviderHint: z.string().trim().min(1).optional(),
+  allowProjectConfig: z.boolean().default(true),
+  env: z.record(envBindingSchema).default({}),
+});
+
+export const opencodeFullPersistedConfigSchema = opencodeFullSharedPersistedConfigSchema.and(
+  z.discriminatedUnion("executionMode", [
+    z.object({
+      executionMode: z.literal("local_cli"),
+      localCli: opencodeFullLocalCliPersistedConfigSchema.default({}),
+    }),
+    z.object({
+      executionMode: z.literal("remote_server"),
+      remoteServer: opencodeFullRemoteServerPersistedConfigSchema,
+    }),
+    z.object({
+      executionMode: z.literal("local_sdk"),
+      localSdk: opencodeFullLocalSdkPersistedConfigSchema.default({}),
+    }),
+  ]),
+);
+
+export type OpencodeFullPersistedConfig = z.infer<typeof opencodeFullPersistedConfigSchema>;
+export type OpencodeFullExecutionMode = z.infer<typeof opencodeFullExecutionModeSchema>;
+export type OpencodeFullLocalCliPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "local_cli" }>;
+export type OpencodeFullRemoteServerPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "remote_server" }>;
+export type OpencodeFullLocalSdkPersistedConfig = Extract<OpencodeFullPersistedConfig, { executionMode: "local_sdk" }>;
+export type OpencodeFullRemoteAuthPersisted = z.infer<typeof opencodeFullRemoteAuthPersistedSchema>;
+export type OpencodeFullRemoteProjectTarget = z.infer<typeof opencodeFullRemoteProjectTargetShapeSchema>;
+
+export function getOpencodeFullConfigSchema(): AdapterConfigSchema {
+  return {
+    fields: [
+      {
+        key: "executionMode",
+        label: "Execution mode",
+        type: "select",
+        required: true,
+        default: "local_cli",
+        options: [
+          { value: "local_cli", label: "Local CLI" },
+          { value: "remote_server", label: "Remote server" },
+          { value: "local_sdk", label: "Local SDK (deferred)" },
+        ],
+        hint: "Explicit mode selection. local_sdk is intentionally deferred and not executable in the current MVP runtime.",
+      },
+      {
+        key: "model",
+        label: "Model",
+        type: "combobox",
+        required: true,
+        hint: "Shared OpenCode model id in provider/model format.",
+      },
+      {
+        key: "variant",
+        label: "Variant",
+        type: "text",
+        hint: "Optional provider-specific reasoning/profile variant.",
+      },
+      {
+        key: "promptTemplate",
+        label: "Prompt Template",
+        type: "textarea",
+        group: "Shared",
+      },
+      {
+        key: "bootstrapPromptTemplate",
+        label: "Bootstrap Prompt Template",
+        type: "textarea",
+        group: "Shared",
+      },
+      {
+        key: "timeoutSec",
+        label: "Timeout (sec)",
+        type: "number",
+        default: 120,
+        group: "Shared",
+      },
+      {
+        key: "connectTimeoutSec",
+        label: "Connect timeout (sec)",
+        type: "number",
+        default: 10,
+        group: "Shared",
+      },
+      {
+        key: "eventStreamIdleTimeoutSec",
+        label: "Event stream idle timeout (sec)",
+        type: "number",
+        default: 30,
+        group: "Shared",
+      },
+      {
+        key: "failFastWhenUnavailable",
+        label: "Fail fast when unavailable",
+        type: "toggle",
+        default: true,
+        group: "Shared",
+      },
+      {
+        key: "localCli.command",
+        label: "Local CLI · Command",
+        type: "text",
+        default: "opencode",
+        group: "Local CLI",
+        hint: "Only used when executionMode=local_cli.",
+      },
+      {
+        key: "localCli.allowProjectConfig",
+        label: "Local CLI · Allow project config",
+        type: "toggle",
+        default: true,
+        group: "Local CLI",
+      },
+      {
+        key: "localCli.dangerouslySkipPermissions",
+        label: "Local CLI · Skip permissions",
+        type: "toggle",
+        default: false,
+        group: "Local CLI",
+      },
+      {
+        key: "localCli.graceSec",
+        label: "Local CLI · Grace period (sec)",
+        type: "number",
+        default: 5,
+        group: "Local CLI",
+      },
+      {
+        key: "localCli.env",
+        label: "Local CLI · Environment bindings",
+        type: "textarea",
+        group: "Local CLI",
+        hint: "JSON object. Secret-capable env bindings are accepted in persisted config.",
+      },
+      {
+        key: "remoteServer.baseUrl",
+        label: "Remote server · Base URL",
+        type: "text",
+        group: "Remote server",
+        hint: "Connect to an already-running OpenCode server. Enter the server root or reverse-proxy base path, not /global/health or another route.",
+      },
+      {
+        key: "remoteServer.auth.mode",
+        label: "Remote server · Authentication",
+        type: "select",
+        default: "none",
+        group: "Remote server",
+        options: [
+          { value: "none", label: "None (MVP happy path)" },
+          { value: "bearer", label: "Bearer token (advanced placeholder)" },
+          { value: "basic", label: "Basic auth (advanced placeholder)" },
+          { value: "header", label: "Custom header (advanced placeholder)" },
+        ],
+        hint: "MVP happy path is auth.mode=none. Other auth modes remain deferred placeholders and are not proven operator setup paths yet.",
+      },
+      {
+        key: "remoteServer.auth.token",
+        label: "Remote server · Bearer token",
+        type: "text",
+        group: "Remote server",
+        hint: "Deferred/advanced placeholder. Secret-capable persisted bindings are accepted.",
+      },
+      {
+        key: "remoteServer.auth.username",
+        label: "Remote server · Basic username",
+        type: "text",
+        group: "Remote server",
+        hint: "Deferred/advanced placeholder.",
+      },
+      {
+        key: "remoteServer.auth.password",
+        label: "Remote server · Basic password",
+        type: "text",
+        group: "Remote server",
+        hint: "Deferred/advanced placeholder. Secret-capable persisted bindings are accepted.",
+      },
+      {
+        key: "remoteServer.auth.headerName",
+        label: "Remote server · Header name",
+        type: "text",
+        group: "Remote server",
+        hint: "Deferred/advanced placeholder.",
+      },
+      {
+        key: "remoteServer.auth.headerValue",
+        label: "Remote server · Header value",
+        type: "text",
+        group: "Remote server",
+        hint: "Deferred/advanced placeholder. Secret-capable persisted bindings are accepted.",
+      },
+      {
+        key: "remoteServer.auth",
+        label: "Remote server · Auth",
+        type: "textarea",
+        group: "Remote server",
+        hint: "JSON object. Secret-capable persisted bindings accepted; runtime uses resolved values only.",
+      },
+      {
+        key: "remoteServer.healthTimeoutSec",
+        label: "Remote server · Health timeout (sec)",
+        type: "number",
+        default: 10,
+        group: "Remote server",
+      },
+      {
+        key: "remoteServer.requireHealthyServer",
+        label: "Remote server · Require healthy server",
+        type: "toggle",
+        default: true,
+        group: "Remote server",
+      },
+      {
+        key: "remoteServer.projectTarget.mode",
+        label: "Remote server · Target mode",
+        type: "select",
+        default: "server_default",
+        group: "Remote server",
+        options: [
+          { value: "server_default", label: "server_default (MVP supported)" },
+          { value: "linked_project_context", label: "linked_project_context (plugin-derived)" },
+        ],
+        hint: "Remote MVP supports server_default and plugin-derived linked_project_context using directory hints only.",
+      },
+      {
+        key: "remoteServer.projectTarget",
+        label: "Remote server · Project target",
+        type: "textarea",
+        group: "Remote server",
+        hint: "JSON object. MVP accepts {\"mode\":\"server_default\"} or {\"mode\":\"linked_project_context\"} with plugin-derived linkRef.",
+      },
+      {
+        key: "remoteServer.linkRef",
+        label: "Remote server · Link reference",
+        type: "textarea",
+        group: "Remote server",
+        hint: "Plugin-derived linked project context metadata for linked_project_context mode.",
+      },
+      {
+        key: "localSdk.sdkProviderHint",
+        label: "Local SDK · Provider hint",
+        type: "text",
+        group: "Local SDK (deferred)",
+        hint: "Schema-only placeholder. local_sdk is not executable yet.",
+      },
+      {
+        key: "localSdk.allowProjectConfig",
+        label: "Local SDK · Allow project config",
+        type: "toggle",
+        default: true,
+        group: "Local SDK (deferred)",
+      },
+      {
+        key: "localSdk.env",
+        label: "Local SDK · Environment bindings",
+        type: "textarea",
+        group: "Local SDK (deferred)",
+        hint: "JSON object placeholder for the deferred branch.",
+      },
+    ],
+  };
+}
+
+export type {
+  OpencodeFullLocalCliRuntimeConfig,
+  OpencodeFullLocalSdkRuntimeConfig,
+  OpencodeFullRemoteAuthRuntime,
+  OpencodeFullRemoteServerRuntimeConfig,
+  OpencodeFullRuntimeConfig,
+} from "./runtime-schema.js";

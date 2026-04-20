@@ -43,6 +43,7 @@ import { loadExternalAdapterPackage, getUiParserSource, getOrExtractUiParserSour
 import { logger } from "../middleware/logger.js";
 import { assertBoardOrgAccess } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
+import { getDefaultTempRoot, stageLocalPackageInstall } from "../services/local-package-staging.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -271,8 +272,11 @@ export function adapterRoutes() {
           installedVersion = explicitVersion;
         }
       } else {
-        // Local path — normalize (e.g., Windows → WSL) and use the resolved path
-        moduleLocalPath = path.resolve(await normalizeLocalPath(packageName));
+        // Local path — normalize and stage into a package-managed temp root so
+        // workspace dependencies resolve like a real installed package.
+        const normalizedLocalPath = path.resolve(await normalizeLocalPath(packageName));
+        const staged = await stageLocalPackageInstall(normalizedLocalPath, getDefaultTempRoot());
+        moduleLocalPath = staged.packagePath;
         try {
           const pkgRaw = await readFile(path.join(moduleLocalPath, "package.json"), "utf-8");
           const v = JSON.parse(pkgRaw).version;

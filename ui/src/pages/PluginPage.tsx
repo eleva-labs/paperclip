@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Link, Navigate, useParams } from "@/lib/router";
+import { Link, Navigate, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -26,6 +26,9 @@ export function PluginPage() {
   }>();
   const { companies, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const location = useLocation();
+  const projectId = useMemo(() => resolvePluginPageProjectId(location.search), [location.search]);
+
   const routeCompany = useMemo(() => {
     if (!routeCompanyPrefix) return null;
     const requested = routeCompanyPrefix.toUpperCase();
@@ -85,8 +88,9 @@ export function PluginPage() {
     () => ({
       companyId: resolvedCompanyId ?? null,
       companyPrefix,
+      projectId,
     }),
-    [resolvedCompanyId, companyPrefix],
+    [resolvedCompanyId, companyPrefix, projectId],
   );
 
   useEffect(() => {
@@ -153,4 +157,11 @@ export function PluginPage() {
       />
     </div>
   );
+}
+
+export function resolvePluginPageProjectId(search: string): string | null {
+  const projectId = new URLSearchParams(search).get("projectId");
+  if (!projectId) return null;
+  const trimmed = projectId.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

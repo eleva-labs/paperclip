@@ -17,6 +17,10 @@ import {
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 import {
+  DEFAULT_OPENCODE_FULL_MODEL,
+  getOpenCodeFullDerivedRemoteUiState,
+} from "../../../packages/adapters/opencode-full/src/ui/index";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -266,13 +270,21 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const config = !isCreate ? ((props.agent.adapterConfig ?? {}) as Record<string, unknown>) : {};
   const runtimeConfig = !isCreate ? ((props.agent.runtimeConfig ?? {}) as Record<string, unknown>) : {};
   const heartbeat = !isCreate ? ((runtimeConfig.heartbeat ?? {}) as Record<string, unknown>) : {};
+  const draftAdapterSchemaValues = !isCreate
+    ? ((runtimeConfig.draftAdapterSchemaValues ?? {}) as Record<string, unknown>)
+    : {};
 
   const adapterType = isCreate
     ? props.values.adapterType
     : overlay.adapterType ?? props.agent.adapterType;
+  const isOpenCodeLikeAdapter =
+    adapterType === "opencode_local" || adapterType === "opencode_project_local";
   const getCapabilities = useAdapterCapabilities();
   const adapterCaps = getCapabilities(adapterType);
-  const isLocal = adapterCaps.supportsInstructionsBundle || adapterCaps.supportsSkills || adapterCaps.supportsLocalAgentJwt;
+  const isLocal =
+    adapterCaps.supportsInstructionsBundle ||
+    adapterCaps.supportsSkills ||
+    adapterCaps.supportsLocalAgentJwt;
   
   const showLegacyWorkingDirectoryField =
     isLocal && shouldShowLegacyWorkingDirectoryField({ isCreate, adapterConfig: config });
@@ -321,7 +333,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     adapterType,
     values: isCreate ? props.values : null,
     set: isCreate ? (patch: Partial<CreateConfigValues>) => props.onChange(patch) : null,
-    config,
+    config: !isCreate && Object.keys(draftAdapterSchemaValues).length > 0
+      ? { ...config, ...draftAdapterSchemaValues }
+      : config,
     eff: eff as <T>(group: "adapterConfig", field: string, original: T) => T,
     mark: mark as (group: "adapterConfig", field: string, value: unknown) => void,
     models,
@@ -369,7 +383,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ? "modelReasoningEffort"
       : adapterType === "cursor"
         ? "mode"
-        : adapterType === "opencode_local"
+        : isOpenCodeLikeAdapter
           ? "variant"
           : "effort";
   const thinkingEffortOptions =
@@ -377,7 +391,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ? codexThinkingEffortOptions
       : adapterType === "cursor"
         ? cursorModeOptions
-        : adapterType === "opencode_local"
+        : isOpenCodeLikeAdapter
           ? openCodeThinkingEffortOptions
           : claudeThinkingEffortOptions;
   const currentThinkingEffort = isCreate
@@ -390,7 +404,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         )
       : adapterType === "cursor"
         ? eff("adapterConfig", "mode", String(config.mode ?? ""))
-      : adapterType === "opencode_local"
+      : isOpenCodeLikeAdapter
         ? eff("adapterConfig", "variant", String(config.variant ?? ""))
       : eff("adapterConfig", "effort", String(config.effort ?? ""));
   const showThinkingEffort = adapterType !== "gemini_local";
@@ -417,6 +431,10 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       heartbeat: mergedHeartbeat,
     };
   }, [isCreate, overlay.heartbeat, runtimeConfig, val]);
+  const opencodeFullDerivedRemoteState = useMemo(() => {
+    if (isCreate || adapterType !== "opencode_full") return null;
+    return getOpenCodeFullDerivedRemoteUiState(config);
+  }, [adapterType, config, isCreate]);
   return (
     <div className={cn("relative", cards && "space-y-6")}>
       {/* ---- Floating Save button (edit mode, when dirty) ---- */}
@@ -552,7 +570,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                       nextValues.model = DEFAULT_GEMINI_LOCAL_MODEL;
                     } else if (t === "cursor") {
                       nextValues.model = DEFAULT_CURSOR_LOCAL_MODEL;
-                    } else if (t === "opencode_local") {
+                    } else if (t === "opencode_full") {
+                      nextValues.model = DEFAULT_OPENCODE_FULL_MODEL;
+                    } else if (t === "opencode_local" || t === "opencode_project_local") {
                       nextValues.model = "";
                     }
                     set!(nextValues);
@@ -599,6 +619,28 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
 
           {testEnvironment.data && (
             <AdapterEnvironmentResult result={testEnvironment.data} />
+          )}
+
+          {!isCreate && opencodeFullDerivedRemoteState?.pluginDerived && (
+            <div className="rounded-md border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs text-blue-100 space-y-1.5">
+              <div className="font-medium">Project-linked remote context (plugin-derived)</div>
+              <div>
+                This agent is following remote project state propagated by the OpenCode Project Sync plugin. The plugin owns the project link status and base URL authority; this form only shows the derived runtime copy saved on the agent.
+              </div>
+              <div>
+                Target mode: <code>linked_project_context</code>
+                {opencodeFullDerivedRemoteState.baseUrl ? <> · Base URL: <code>{opencodeFullDerivedRemoteState.baseUrl}</code></> : null}
+              </div>
+              <div>
+                Linked directory hint: <code>{opencodeFullDerivedRemoteState.linkedDirectoryHint ?? "missing"}</code>
+                {opencodeFullDerivedRemoteState.canonicalWorkspaceId ? <> · Canonical workspace: <code>{opencodeFullDerivedRemoteState.canonicalWorkspaceId}</code></> : null}
+              </div>
+              {opencodeFullDerivedRemoteState.authMode !== "none" ? (
+                <div>
+                  Authentication mode <code>{opencodeFullDerivedRemoteState.authMode}</code> is an advanced/deferred branch and not part of the MVP success path.
+                </div>
+              ) : null}
+            </div>
           )}
 
           {/* Working directory */}
@@ -676,14 +718,15 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   immediate
                   className={inputClass}
                   placeholder={
-                    ({
-                      claude_local: "claude",
-                      codex_local: "codex",
-                      gemini_local: "gemini",
-                      pi_local: "pi",
-                      cursor: "agent",
-                      opencode_local: "opencode",
-                    } as Record<string, string>)[adapterType] ?? adapterType.replace(/_local$/, "")
+                      ({
+                        claude_local: "claude",
+                        codex_local: "codex",
+                        gemini_local: "gemini",
+                        pi_local: "pi",
+                        cursor: "agent",
+                        opencode_local: "opencode",
+                        opencode_project_local: "opencode",
+                      } as Record<string, string>)[adapterType] ?? adapterType.replace(/_local$/, "")
                   }
                 />
               </Field>
@@ -698,9 +741,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 }
                 open={modelOpen}
                 onOpenChange={setModelOpen}
-                allowDefault={adapterType !== "opencode_local"}
-                required={adapterType === "opencode_local"}
-                groupByProvider={adapterType === "opencode_local"}
+                allowDefault={!isOpenCodeLikeAdapter}
+                required={isOpenCodeLikeAdapter}
+                groupByProvider={isOpenCodeLikeAdapter}
                 creatable
                 detectedModel={detectedModel}
                 detectedModelCandidates={[]}

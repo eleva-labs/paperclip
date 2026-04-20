@@ -208,11 +208,14 @@ export function runWorker(
     });
   }
   const entry = process.argv[1];
+  if (typeof process.send === "function") {
+    return startWorkerRpcHost({ plugin });
+  }
   if (typeof entry !== "string") return;
   const thisFile = path.resolve(fileURLToPath(moduleUrl));
   const entryPath = path.resolve(entry);
   if (thisFile === entryPath) {
-    startWorkerRpcHost({ plugin });
+    return startWorkerRpcHost({ plugin });
   }
 }
 

@@ -136,6 +136,27 @@ Rules:
 - Do not rely on host design-system components or undocumented app internals.
 - GitHub repository installs are not a first-class workflow today. For local development, use a checked-out local path. For production, publish to npm or a private npm-compatible registry.
 
+## Companion plugin + external adapter packaging
+
+Some integrations span both plugin UX/worker logic and adapter runtime behavior. The OpenCode project MVP uses that split intentionally:
+
+- The companion plugin package owns project-scoped bootstrap, discovery, sync state, guarded export, and operator-facing UI.
+- The external adapter package owns runtime execution, model discovery, config-schema exposure, and any browser-side `./ui-parser` assets the adapter loader serves.
+- Keep these as separate packages. Do not replace a built-in adapter type when the goal is to add a project-aware variant; register a new external adapter type instead.
+- For local development, install the plugin package through the plugin manager/API and install the adapter package through the adapter-plugin path (`~/.paperclip/adapter-plugins.json` or equivalent local adapter manager flow).
+
+Recommended verification for this paired model:
+
+```bash
+pnpm --filter @paperclipai/plugin-opencode-project-sync typecheck
+pnpm --filter @paperclipai/plugin-opencode-project-sync test
+pnpm --filter @paperclipai/plugin-opencode-project-sync build
+pnpm --filter @paperclipai/adapter-opencode-project-local typecheck
+pnpm --filter @paperclipai/adapter-opencode-project-local build
+```
+
+If you are validating served adapter UI assets such as `./ui-parser`, do it from a hydrated workspace after the adapter package has been built so the host reads the emitted JavaScript artifact rather than raw source.
+
 ## Verification before handoff
 
 At minimum:

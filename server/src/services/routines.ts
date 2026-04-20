@@ -36,6 +36,7 @@ import { trackRoutineRun } from "@paperclipai/shared/telemetry";
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { getTelemetryClient } from "../telemetry.js";
+import { assertAssignableAgent as assertAssignableAgentForRoutine } from "./agent-project-assignment.js";
 import { issueService } from "./issues.js";
 import { secretService } from "./secrets.js";
 import { parseCron, validateCron } from "./cron.js";
@@ -337,17 +338,19 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
     return routine;
   }
 
-  async function assertAssignableAgent(companyId: string, agentId: string | null | undefined) {
-    if (!agentId) return;
-    const agent = await db
-      .select({ id: agents.id, companyId: agents.companyId, status: agents.status })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .then((rows) => rows[0] ?? null);
-    if (!agent) throw notFound("Assignee agent not found");
-    if (agent.companyId !== companyId) throw unprocessable("Assignee must belong to same company");
-    if (agent.status === "pending_approval") throw conflict("Cannot assign routines to pending approval agents");
-    if (agent.status === "terminated") throw conflict("Cannot assign routines to terminated agents");
+  async function assertAssignableAgent(
+    companyId: string,
+    agentId: string | null | undefined,
+    targetProjectId?: string | null,
+  ) {
+    await assertAssignableAgentForRoutine({
+      db,
+      companyId,
+      agentId,
+      targetProjectId,
+      pendingApprovalMessage: "Cannot assign routines to pending approval agents",
+      terminatedMessage: "Cannot assign routines to terminated agents",
+    });
   }
 
   async function assertProject(companyId: string, projectId: string | null | undefined) {
@@ -1027,7 +1030,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
 
     create: async (companyId: string, input: CreateRoutine, actor: Actor): Promise<Routine> => {
       await assertProject(companyId, input.projectId ?? null);
-      await assertAssignableAgent(companyId, input.assigneeAgentId ?? null);
+      await assertAssignableAgent(companyId, input.assigneeAgentId ?? null, input.projectId ?? null);
       if (input.goalId) await assertGoal(companyId, input.goalId);
       if (input.parentIssueId) await assertParentIssue(companyId, input.parentIssueId);
       const variables = syncRoutineVariablesWithTemplate(
@@ -1079,7 +1082,9 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
         patch.variables === undefined ? existing.variables : sanitizeRoutineVariableInputs(patch.variables),
       );
       if (patch.projectId !== undefined) await assertProject(existing.companyId, nextProjectId);
-      if (patch.assigneeAgentId !== undefined) await assertAssignableAgent(existing.companyId, nextAssigneeAgentId);
+      if (patch.assigneeAgentId !== undefined || patch.projectId !== undefined) {
+        await assertAssignableAgent(existing.companyId, nextAssigneeAgentId, nextProjectId);
+      }
       if (patch.goalId) await assertGoal(existing.companyId, patch.goalId);
       if (patch.parentIssueId) await assertParentIssue(existing.companyId, patch.parentIssueId);
       assertRoutineVariableDefinitions(nextVariables);
@@ -1276,7 +1281,11 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
       if (!routine) throw notFound("Routine not found");
       if (routine.status === "archived") throw conflict("Routine is archived");
       await assertProject(routine.companyId, input.projectId ?? null);
-      await assertAssignableAgent(routine.companyId, input.assigneeAgentId ?? null);
+      await assertAssignableAgent(
+        routine.companyId,
+        input.assigneeAgentId ?? null,
+        input.projectId ?? routine.projectId ?? null,
+      );
       const trigger = input.triggerId ? await getTriggerById(input.triggerId) : null;
       if (trigger && trigger.routineId !== routine.id) throw forbidden("Trigger does not belong to routine");
       if (trigger && !trigger.enabled) throw conflict("Routine trigger is not active");

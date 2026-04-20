@@ -34,6 +34,7 @@ server/src/**/*.js.map
 server/src/**/*.d.ts
 server/src/**/*.d.ts.map
 tmp/
+docs/temp/
 feedback-export-*
 
 # Editor / tool temp files
@@ -48,9 +49,13 @@ feedback-export-*
 .doc-review-cursor
 
 # Playwright
+playwright-outputs/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/release-smoke/test-results/
 tests/release-smoke/playwright-report/
 .superset/
 .claude/worktrees/
+
+# Local generated package archives
+packages/**/*.tgz
